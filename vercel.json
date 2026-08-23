@@ -1,4 +1,5 @@
 {
+  "outputDirectory": "public",
   "crons": [
     { "path": "/api/sync", "schedule": "0 8 * * *" }
   ]
