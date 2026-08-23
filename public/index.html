@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Turnover Cleaning Calendar</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<header class="app-header">
+  <h1>Turnover Cleaning Calendar</h1>
+  <div class="legend">
+    <span class="legend-item"><span class="dot" style="background:#FF385C"></span>Airbnb</span>
+    <span class="legend-item"><span class="dot" style="background:#00A699"></span>VRBO</span>
+    <span class="legend-item"><span class="dot" style="background:#003580"></span>Booking.com</span>
+    <span class="legend-item"><span class="dot" style="background:#cbd5e1"></span>Cleaning</span>
+  </div>
+  <div class="header-actions">
+    <span id="syncStatus" class="sync-status"></span>
+    <button id="syncNowBtn" class="btn btn-secondary">Sync Now</button>
+  </div>
+</header>
+
+<main>
+  <div id="calendar"></div>
+</main>
+
+<div id="modalOverlay" class="modal-overlay hidden">
+  <div class="modal" role="dialog" aria-modal="true">
+    <button id="modalClose" class="modal-close" aria-label="Close">&times;</button>
+
+    <h2 id="modalTitle">Booking</h2>
+    <p id="modalDates" class="modal-subtitle"></p>
+
+    <section class="modal-section">
+      <label for="assignedCleaner">Assigned cleaner</label>
+      <select id="assignedCleaner">
+        <option value="">Unassigned</option>
+      </select>
+    </section>
+
+    <section class="modal-section">
+      <label for="nextGuestCount">Number of guests staying next (linens to leave out)</label>
+      <input id="nextGuestCount" type="number" min="0" step="1" placeholder="e.g. 4" />
+    </section>
+
+    <section class="modal-section">
+      <label class="checkbox-label">
+        <input id="statusComplete" type="checkbox" />
+        Mark cleaning complete
+      </label>
+    </section>
+
+    <section class="modal-section">
+      <label>Checklist</label>
+      <ul id="checklistItems" class="checklist"></ul>
+    </section>
+
+    <section class="modal-section">
+      <label for="notes">Notes</label>
+      <textarea id="notes" rows="3" placeholder="Anything the next cleaner or host should know..."></textarea>
+    </section>
+
+    <section class="modal-section">
+      <button id="saveBtn" class="btn btn-primary">Save</button>
+      <span id="saveStatus" class="save-status"></span>
+    </section>
+
+    <hr />
+
+    <section class="modal-section">
+      <label>Proof photos</label>
+      <div id="proofPhotos" class="photo-grid"></div>
+      <input id="proofPhotoInput" type="file" accept="image/*" multiple />
+    </section>
+
+    <hr />
+
+    <section class="modal-section">
+      <label>Report an issue</label>
+      <div id="issuesList" class="issues-list"></div>
+      <textarea id="issueDescription" rows="2" placeholder="Describe the issue (damage, missing item, low supplies...)"></textarea>
+      <input id="issuePhotoInput" type="file" accept="image/*" />
+      <button id="reportIssueBtn" class="btn btn-warning">Report Issue</button>
+    </section>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
