@@ -72,6 +72,10 @@
     wrap.className = 'event-inner';
 
     if (p.kind === 'cleaning') {
+      const statusDot = document.createElement('span');
+      statusDot.className = 'status-dot' + (p.booking.status === 'complete' ? ' complete' : '');
+      wrap.appendChild(statusDot);
+
       const label = document.createElement('span');
       label.textContent = 'Cleaning';
       wrap.appendChild(label);
@@ -161,15 +165,19 @@
       extendedProps: { ...b, kind: 'booking', bookingUid: b.uid },
     }));
 
-    const cleaningEvents = cleaningWindows.map((w) => ({
-      id: `cleaning:${w.booking.uid}`,
-      title: 'Cleaning',
-      start: w.start_date,
-      end: addDaysStr(w.end_date, 1),
-      allDay: true,
-      classNames: ['fc-cleaning-event'].concat(w.booking.status === 'complete' ? ['fc-cleaning-complete'] : []),
-      extendedProps: { kind: 'cleaning', booking: w.booking, bookingUid: w.booking.uid, cappedByNextBooking: w.cappedByNextBooking },
-    }));
+    const cleaningEvents = cleaningWindows.map((w) => {
+      const cleanerColor = w.booking.assigned_cleaner ? cfg.CLEANER_COLORS[w.booking.assigned_cleaner] : null;
+      return {
+        id: `cleaning:${w.booking.uid}`,
+        title: 'Cleaning',
+        start: w.start_date,
+        end: addDaysStr(w.end_date, 1),
+        allDay: true,
+        ...(cleanerColor ? { backgroundColor: cleanerColor, borderColor: cleanerColor } : {}),
+        classNames: ['fc-cleaning-event'].concat(cleanerColor ? ['fc-cleaning-assigned'] : []),
+        extendedProps: { kind: 'cleaning', booking: w.booking, bookingUid: w.booking.uid, cappedByNextBooking: w.cappedByNextBooking },
+      };
+    });
 
     const unavailabilityEvents = unavailability.map((u) => ({
       id: `unavail:${u.id}`,
@@ -586,6 +594,17 @@
   });
 
   // ---------- Init ----------
+
+  cfg.CLEANERS.forEach((c) => {
+    const item = document.createElement('span');
+    item.className = 'legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = cfg.CLEANER_COLORS[c.id] || '#888';
+    item.appendChild(dot);
+    item.appendChild(document.createTextNode(c.label));
+    document.getElementById('cleanerLegend').appendChild(item);
+  });
 
   initCalendar();
 })();

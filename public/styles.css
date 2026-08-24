@@ -91,14 +91,20 @@ main {
 .btn-warning { background: #fdf1e0; color: var(--warning); }
 
 .fc-cleaning-event {
-  background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 4px, #e2e8f0 4px, #e2e8f0 8px) !important;
-  border-color: #94a3b8 !important;
-  color: #334155 !important;
+  /* Unassigned default - overridden by an inline background-color when a
+     cleaner is assigned (see .fc-cleaning-assigned below). */
+  background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 4px, #e2e8f0 4px, #e2e8f0 8px);
+  border-color: #94a3b8;
+  color: #334155;
 }
 
-.fc-cleaning-event.fc-cleaning-complete {
-  background: repeating-linear-gradient(45deg, #86efac, #86efac 4px, #bbf7d0 4px, #bbf7d0 8px) !important;
-  border-color: #4ade80 !important;
+.fc-cleaning-event.fc-cleaning-assigned {
+  background-image: none;
+  color: #fff;
+}
+
+.fc-cleaning-event.fc-cleaning-assigned .status-dot {
+  background: rgba(255, 255, 255, 0.5);
 }
 
 .fc-unavailable-event {

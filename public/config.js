@@ -10,6 +10,13 @@ window.APP_CONFIG = {
     { id: "em", label: "Em Bollander" },
   ],
 
+  // Used to color-code cleaning bars by who's assigned.
+  CLEANER_COLORS: {
+    kyle_stephanie: "#8b5cf6",
+    baylie: "#f59e0b",
+    em: "#06b6d4",
+  },
+
   SOURCE_LABELS: {
     airbnb: "Airbnb",
     vrbo: "VRBO",
