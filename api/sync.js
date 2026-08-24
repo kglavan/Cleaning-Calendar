@@ -23,21 +23,27 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Supabase server env vars are not configured' });
   }
 
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
+  let supabase;
+  try {
+    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  } catch (err) {
+    return res.status(500).json({ error: `Failed to create Supabase client: ${err.message}` });
+  }
 
-  const summary = { synced: 0, cancelled: 0, errors: [] };
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)),
+    ]);
+  }
 
-  for (const source of SOURCES) {
+  async function syncSource(source) {
     if (!source.url) {
-      summary.errors.push(`No iCal URL configured for ${source.key} (set ICAL_URL_${source.key.toUpperCase()})`);
-      continue;
+      return { synced: 0, cancelled: 0, error: `No iCal URL configured for ${source.key} (set ICAL_URL_${source.key.toUpperCase()})` };
     }
 
     try {
-      const events = await ical.async.fromURL(source.url);
+      const events = await withTimeout(ical.async.fromURL(source.url), 15000, `Fetching ${source.key} calendar`);
       const seenUids = [];
       const rows = [];
       const now = new Date().toISOString();
@@ -59,12 +65,13 @@ export default async function handler(req, res) {
         });
       }
 
+      let synced = 0;
+      let cancelled = 0;
+
       if (rows.length > 0) {
-        const { error } = await supabase
-          .from('bookings')
-          .upsert(rows, { onConflict: 'uid' });
+        const { error } = await supabase.from('bookings').upsert(rows, { onConflict: 'uid' });
         if (error) throw error;
-        summary.synced += rows.length;
+        synced = rows.length;
       }
 
       // Anything previously synced for this source that no longer appears
@@ -86,12 +93,28 @@ export default async function handler(req, res) {
           .update({ cancelled: true })
           .in('uid', missingUids);
         if (cancelErr) throw cancelErr;
-        summary.cancelled += missingUids.length;
+        cancelled = missingUids.length;
       }
+
+      return { synced, cancelled, error: null };
     } catch (err) {
-      summary.errors.push(`${source.key}: ${err.message}`);
+      return { synced: 0, cancelled: 0, error: `${source.key}: ${err.message}` };
     }
   }
 
-  return res.status(200).json(summary);
+  try {
+    const results = await Promise.all(SOURCES.map(syncSource));
+    const summary = results.reduce(
+      (acc, r) => {
+        acc.synced += r.synced;
+        acc.cancelled += r.cancelled;
+        if (r.error) acc.errors.push(r.error);
+        return acc;
+      },
+      { synced: 0, cancelled: 0, errors: [] }
+    );
+    return res.status(200).json(summary);
+  } catch (err) {
+    return res.status(500).json({ error: `Sync crashed: ${err.message}` });
+  }
 }

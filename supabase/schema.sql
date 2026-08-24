@@ -167,3 +167,36 @@ $$;
 
 revoke all on function public.set_issue_resolved(uuid, boolean) from public;
 grant execute on function public.set_issue_resolved(uuid, boolean) to anon;
+
+-- ============================================================
+-- cleaner_unavailability: date ranges a cleaner is blocked off
+-- (vacation, sick, etc.), shown on the calendar as their own bar.
+-- ============================================================
+create table if not exists public.cleaner_unavailability (
+  id uuid primary key default gen_random_uuid(),
+  cleaner text not null check (cleaner in ('kyle_stephanie', 'baylie', 'em')),
+  start_date date not null,
+  end_date date not null check (end_date >= start_date),
+  reason text,
+  created_at timestamptz not null default now()
+);
+
+alter table public.cleaner_unavailability enable row level security;
+
+drop policy if exists "public read unavailability" on public.cleaner_unavailability;
+create policy "public read unavailability"
+  on public.cleaner_unavailability for select
+  to anon
+  using (true);
+
+drop policy if exists "public insert unavailability" on public.cleaner_unavailability;
+create policy "public insert unavailability"
+  on public.cleaner_unavailability for insert
+  to anon
+  with check (cleaner in ('kyle_stephanie', 'baylie', 'em'));
+
+drop policy if exists "public delete unavailability" on public.cleaner_unavailability;
+create policy "public delete unavailability"
+  on public.cleaner_unavailability for delete
+  to anon
+  using (true);

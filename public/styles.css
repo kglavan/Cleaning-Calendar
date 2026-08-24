@@ -90,38 +90,27 @@ main {
 .btn-secondary { background: #e9ecef; color: var(--text); }
 .btn-warning { background: #fdf1e0; color: var(--warning); }
 
-.turnover-bar-row {
-  display: flex;
-  gap: 1px;
-  height: 14px;
-  margin: 2px 2px 4px;
-  border-radius: 3px;
+.fc-cleaning-event {
+  background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 4px, #e2e8f0 4px, #e2e8f0 8px) !important;
+  border-color: #94a3b8 !important;
+  color: #334155 !important;
+}
+
+.fc-cleaning-event.fc-cleaning-complete {
+  background: repeating-linear-gradient(45deg, #86efac, #86efac 4px, #bbf7d0 4px, #bbf7d0 8px) !important;
+  border-color: #4ade80 !important;
+}
+
+.fc-unavailable-event {
+  background: repeating-linear-gradient(45deg, #fca5a5, #fca5a5 4px, #fecaca 4px, #fecaca 8px) !important;
+  border-color: #f87171 !important;
+  color: #7f1d1d !important;
+}
+
+.event-inner {
   overflow: hidden;
-  cursor: pointer;
-}
-
-.turnover-seg {
-  min-width: 0;
-}
-
-.turnover-seg-full {
-  flex: 1 1 100%;
-}
-
-.turnover-seg-third {
-  flex: 1 1 0;
-}
-
-.turnover-seg-empty {
-  background: transparent;
-}
-
-.turnover-seg-cleaning {
-  background: repeating-linear-gradient(45deg, #cbd5e1, #cbd5e1 4px, #e2e8f0 4px, #e2e8f0 8px);
-}
-
-.turnover-seg-cleaning.turnover-seg-complete {
-  background: repeating-linear-gradient(45deg, #86efac, #86efac 4px, #bbf7d0 4px, #bbf7d0 8px);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .cleaner-tag {

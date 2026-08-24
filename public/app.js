@@ -7,10 +7,7 @@
 
   let calendar;
   let currentBooking = null; // the booking currently open in the modal
-  let currentBookings = []; // raw booking rows, kept in sync with the DB
-  let currentCleaningWindows = [];
   let bookingsByUid = new Map();
-  const dayCellBarRows = new Map(); // dateStr -> the bar-row element mounted in that day cell
 
   // ---------- Calendar ----------
 
@@ -27,18 +24,24 @@
     return data;
   }
 
+  async function fetchUnavailabilityRaw() {
+    const { data, error } = await db
+      .from('cleaner_unavailability')
+      .select('*')
+      .order('start_date', { ascending: true });
+
+    if (error) {
+      console.error('Failed to load cleaner unavailability', error);
+      return [];
+    }
+    return data;
+  }
+
   function addDaysStr(dateStr, n) {
     const [y, m, d] = dateStr.split('-').map(Number);
     const dt = new Date(Date.UTC(y, m - 1, d));
     dt.setUTCDate(dt.getUTCDate() + n);
     return dt.toISOString().slice(0, 10);
-  }
-
-  function dateToLocalStr(d) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
   }
 
   // A cleaning window runs from a booking's checkout day until whichever
@@ -61,147 +64,125 @@
     });
   }
 
-  // For a given date, figure out what to show: either one full-width
-  // segment (a mid-stay day) or three one-third segments (checkout /
-  // cleaning / check-in), any of which may be empty.
-  function getDaySegments(dateStr) {
-    const midStay = currentBookings.find((b) => dateStr > b.start_date && dateStr < b.end_date);
-    if (midStay) {
-      return { full: { type: 'booking', booking: midStay } };
-    }
-
-    const checkout = currentBookings.find((b) => b.end_date === dateStr);
-    const checkin = currentBookings.find((b) => b.start_date === dateStr);
-
-    let left = checkout ? { type: 'booking', booking: checkout } : null;
-    let mid = null;
-    let right = checkin ? { type: 'booking', booking: checkin } : null;
-
-    currentCleaningWindows
-      .filter((w) => dateStr >= w.start_date && dateStr <= w.end_date)
-      .forEach((w) => {
-        const isStart = dateStr === w.start_date;
-        const isEnd = dateStr === w.end_date;
-
-        if (isStart) {
-          if (!mid) mid = { type: 'cleaning', booking: w.booking };
-          if (!isEnd && !checkin && !right) right = { type: 'cleaning', booking: w.booking };
-        }
-        if (isEnd) {
-          if (!left) left = { type: 'cleaning', booking: w.booking };
-          if (!mid) mid = { type: 'cleaning', booking: w.booking };
-          if (!isStart && !checkin && !w.cappedByNextBooking && !right) {
-            right = { type: 'cleaning', booking: w.booking };
-          }
-        }
-        if (!isStart && !isEnd) {
-          if (!left) left = { type: 'cleaning', booking: w.booking };
-          if (!mid) mid = { type: 'cleaning', booking: w.booking };
-          if (!right) right = { type: 'cleaning', booking: w.booking };
-        }
-      });
-
-    return { left, mid, right };
-  }
-
-  function titleFor(b) {
-    return `${cfg.SOURCE_LABELS[b.source] || b.source}${b.assigned_cleaner ? ' - ' + cleanerLabel(b.assigned_cleaner) : ''}`;
-  }
-
-  function makeSegmentDiv(segment, sizeClass) {
-    const div = document.createElement('div');
-    div.className = `turnover-seg turnover-seg-${sizeClass}`;
-    if (!segment) {
-      div.classList.add('turnover-seg-empty');
-      return div;
-    }
-    div.dataset.bookingUid = segment.booking.uid;
-    if (segment.type === 'booking') {
-      div.classList.add('turnover-seg-booking');
-      div.style.backgroundColor = cfg.SOURCE_COLORS[segment.booking.source] || '#888';
-      div.title = titleFor(segment.booking);
-    } else {
-      div.classList.add('turnover-seg-cleaning');
-      if (segment.booking.status === 'complete') div.classList.add('turnover-seg-complete');
-      div.title = 'Cleaning' + (segment.booking.assigned_cleaner ? ' - ' + cleanerLabel(segment.booking.assigned_cleaner) : '');
-    }
-    return div;
-  }
-
-  function renderBarRow(dateStr, barRow) {
-    barRow.innerHTML = '';
-    const seg = getDaySegments(dateStr);
-    if (seg.full) {
-      barRow.appendChild(makeSegmentDiv(seg.full, 'full'));
-    } else {
-      barRow.appendChild(makeSegmentDiv(seg.left, 'third'));
-      barRow.appendChild(makeSegmentDiv(seg.mid, 'third'));
-      barRow.appendChild(makeSegmentDiv(seg.right, 'third'));
-    }
-  }
-
-  function dayCellDidMount(arg) {
-    const dateStr = dateToLocalStr(arg.date);
-    const barRow = document.createElement('div');
-    barRow.className = 'turnover-bar-row';
-    barRow.addEventListener('click', (e) => {
-      const target = e.target.closest('[data-booking-uid]');
-      if (!target) return;
-      const booking = bookingsByUid.get(target.dataset.bookingUid);
-      if (booking) openModal(booking);
-    });
-    arg.el.appendChild(barRow);
-    dayCellBarRows.set(dateStr, barRow);
-    renderBarRow(dateStr, barRow);
-  }
-
-  function dayCellWillUnmount(arg) {
-    dayCellBarRows.delete(dateToLocalStr(arg.date));
-  }
-
   function renderEventContent(arg) {
     const p = arg.event.extendedProps;
+    if (p.kind === 'unavailability') return renderUnavailabilityEventContent(arg);
+
     const wrap = document.createElement('div');
+    wrap.className = 'event-inner';
+
+    if (p.kind === 'cleaning') {
+      const label = document.createElement('span');
+      label.textContent = 'Cleaning';
+      wrap.appendChild(label);
+      if (p.booking.assigned_cleaner) {
+        const tag = document.createElement('div');
+        tag.className = 'cleaner-tag';
+        tag.textContent = cleanerLabel(p.booking.assigned_cleaner);
+        wrap.appendChild(tag);
+      }
+      return { domNodes: [wrap] };
+    }
 
     const statusDot = document.createElement('span');
     statusDot.className = 'status-dot' + (p.status === 'complete' ? ' complete' : '');
     wrap.appendChild(statusDot);
 
     const label = document.createElement('span');
-    label.textContent = `${cfg.SOURCE_LABELS[p.source] || p.source}`;
+    label.textContent = cfg.SOURCE_LABELS[p.source] || p.source;
     wrap.appendChild(label);
-
-    if (p.assigned_cleaner) {
-      const tag = document.createElement('div');
-      tag.className = 'cleaner-tag';
-      tag.textContent = cleanerLabel(p.assigned_cleaner);
-      wrap.appendChild(tag);
-    }
 
     return { domNodes: [wrap] };
   }
 
-  async function refreshCalendar() {
-    currentBookings = await fetchBookingsRaw();
-    currentCleaningWindows = computeCleaningWindows(currentBookings);
-    bookingsByUid = new Map(currentBookings.map((b) => [b.uid, b]));
+  function renderUnavailabilityEventContent(arg) {
+    const p = arg.event.extendedProps;
+    const wrap = document.createElement('div');
+    wrap.className = 'event-inner';
+    const label = document.createElement('span');
+    label.textContent = `${cleanerLabel(p.cleaner)}${p.reason ? ' - ' + p.reason : ' - Unavailable'}`;
+    wrap.appendChild(label);
+    return { domNodes: [wrap] };
+  }
 
-    // Kept only so the list view (a plain agenda list, not a bar grid) has
-    // something to render - it's hidden everywhere else via eventDidMount.
-    const listEvents = currentBookings.map((b) => ({
+  // Bars span the real multi-day range as ONE continuous FullCalendar
+  // event, but a booking's check-in/checkout day (and a cleaning window's
+  // end, if a real next booking reserves that day's check-in) should only
+  // show a third of that day. Rather than touch the harness's own
+  // left/right (which controls which day-columns it spans, and isn't a
+  // plain "% of container" the way it might look), we inset the inner
+  // bar with margins sized against the harness's actual rendered width -
+  // that can't corrupt FullCalendar's own column-span layout.
+  function eventDidMount(info) {
+    if (info.view.type.indexOf('dayGrid') !== 0) return;
+    if (!info.isStart && !info.isEnd) return;
+
+    const p = info.event.extendedProps;
+    if (p.kind !== 'booking' && p.kind !== 'cleaning') return;
+
+    const startFrac = p.kind === 'booking' ? 2 / 3 : 1 / 3;
+    const endFrac = p.kind === 'booking' ? 2 / 3 : p.cappedByNextBooking ? 1 / 3 : 0;
+    if (!(info.isStart && startFrac > 0) && !(info.isEnd && endFrac > 0)) return;
+
+    const harness = info.el.closest('.fc-daygrid-event-harness');
+    const dayFrame = document.querySelector('.fc-daygrid-day-frame');
+    if (!harness || !dayFrame) return;
+
+    const colWidth = dayFrame.getBoundingClientRect().width;
+    const harnessWidth = harness.getBoundingClientRect().width;
+    if (!colWidth || !harnessWidth) return;
+    const numDays = Math.max(1, Math.round(harnessWidth / colWidth));
+    const oneDayPct = 100 / numDays;
+
+    const leftPct = info.isStart ? oneDayPct * startFrac : 0;
+    const rightPct = info.isEnd ? oneDayPct * endFrac : 0;
+
+    info.el.style.marginLeft = leftPct + '%';
+    info.el.style.marginRight = rightPct + '%';
+    info.el.style.width = `calc(100% - ${leftPct + rightPct}%)`;
+  }
+
+  async function refreshCalendar() {
+    const [bookings, unavailability] = await Promise.all([
+      fetchBookingsRaw(),
+      fetchUnavailabilityRaw(),
+    ]);
+    const cleaningWindows = computeCleaningWindows(bookings);
+    bookingsByUid = new Map(bookings.map((b) => [b.uid, b]));
+
+    const bookingEvents = bookings.map((b) => ({
       id: b.uid,
-      title: b.summary || cfg.SOURCE_LABELS[b.source] || b.source,
+      title: cfg.SOURCE_LABELS[b.source] || b.source,
       start: b.start_date,
-      end: b.end_date,
+      end: addDaysStr(b.end_date, 1),
       allDay: true,
       backgroundColor: cfg.SOURCE_COLORS[b.source] || '#888',
       borderColor: cfg.SOURCE_COLORS[b.source] || '#888',
-      extendedProps: { ...b },
+      extendedProps: { ...b, kind: 'booking', bookingUid: b.uid },
     }));
-    calendar.removeAllEvents();
-    calendar.addEventSource(listEvents);
 
-    dayCellBarRows.forEach((barRow, dateStr) => renderBarRow(dateStr, barRow));
+    const cleaningEvents = cleaningWindows.map((w) => ({
+      id: `cleaning:${w.booking.uid}`,
+      title: 'Cleaning',
+      start: w.start_date,
+      end: addDaysStr(w.end_date, 1),
+      allDay: true,
+      classNames: ['fc-cleaning-event'].concat(w.booking.status === 'complete' ? ['fc-cleaning-complete'] : []),
+      extendedProps: { kind: 'cleaning', booking: w.booking, bookingUid: w.booking.uid, cappedByNextBooking: w.cappedByNextBooking },
+    }));
+
+    const unavailabilityEvents = unavailability.map((u) => ({
+      id: `unavail:${u.id}`,
+      title: cleanerLabel(u.cleaner),
+      start: u.start_date,
+      end: addDaysStr(u.end_date, 1),
+      allDay: true,
+      classNames: ['fc-unavailable-event'],
+      extendedProps: { kind: 'unavailability', ...u },
+    }));
+
+    calendar.removeAllEvents();
+    calendar.addEventSource([...bookingEvents, ...cleaningEvents, ...unavailabilityEvents]);
   }
 
   function initCalendar() {
@@ -214,20 +195,15 @@
         center: 'title',
         right: 'dayGridMonth,dayGridWeek,listMonth',
       },
-      dayCellDidMount,
-      dayCellWillUnmount,
       eventContent: renderEventContent,
-      eventDidMount: (info) => {
-        // The bar-grid views get their own custom thirds-based bars
-        // (see dayCellDidMount); FullCalendar's own event bars would
-        // just duplicate them, so hide them there. List view still
-        // shows the normal event rows.
-        if (info.view.type.indexOf('dayGrid') === 0) {
-          info.el.style.display = 'none';
-        }
-      },
+      eventDidMount,
       eventClick: (info) => {
-        const booking = bookingsByUid.get(info.event.id);
+        const p = info.event.extendedProps;
+        if (p.kind === 'unavailability') {
+          openUnavailModal(p);
+          return;
+        }
+        const booking = bookingsByUid.get(p.bookingUid);
         if (booking) openModal(booking);
       },
     });
@@ -476,16 +452,136 @@
     statusEl.textContent = 'Syncing...';
     try {
       const res = await fetch('/api/sync');
-      const result = await res.json();
+      const bodyText = await res.text();
+      let result;
+      try {
+        result = JSON.parse(bodyText);
+      } catch (parseErr) {
+        console.error('Sync response was not JSON:', res.status, bodyText.slice(0, 500));
+        statusEl.textContent = `Sync failed (HTTP ${res.status} - see console)`;
+        await refreshCalendar();
+        return;
+      }
+
+      if (result.error) {
+        console.error('Sync error:', result.error);
+        statusEl.textContent = `Sync failed: ${result.error}`;
+        await refreshCalendar();
+        return;
+      }
+
       const parts = [`${result.synced} synced`];
       if (result.cancelled) parts.push(`${result.cancelled} cancelled`);
       if (result.errors && result.errors.length) parts.push(`${result.errors.length} error(s)`);
       statusEl.textContent = parts.join(', ');
       if (result.errors && result.errors.length) console.error(result.errors);
     } catch (err) {
-      statusEl.textContent = 'Sync failed';
+      statusEl.textContent = `Sync failed: ${err.message}`;
       console.error(err);
     }
+    await refreshCalendar();
+  });
+
+  // ---------- Cleaner unavailability ----------
+
+  const unavailOverlay = document.getElementById('unavailModalOverlay');
+  const unavailCleanerSelect = document.getElementById('unavailCleaner');
+
+  cfg.CLEANERS.forEach((c) => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.label;
+    unavailCleanerSelect.appendChild(opt);
+  });
+
+  async function loadUnavailList() {
+    const list = document.getElementById('unavailList');
+    list.innerHTML = '';
+    const rows = await fetchUnavailabilityRaw();
+
+    if (rows.length === 0) {
+      list.textContent = 'No unavailability on record.';
+      return;
+    }
+
+    rows.forEach((u) => {
+      const item = document.createElement('div');
+      item.className = 'issue-item';
+
+      const desc = document.createElement('span');
+      desc.textContent = `${cleanerLabel(u.cleaner)}: ${u.start_date} to ${u.end_date}${u.reason ? ' (' + u.reason + ')' : ''}`;
+      item.appendChild(desc);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-warning';
+      delBtn.style.marginLeft = '8px';
+      delBtn.textContent = 'Remove';
+      delBtn.addEventListener('click', async () => {
+        await db.from('cleaner_unavailability').delete().eq('id', u.id);
+        await loadUnavailList();
+        await refreshCalendar();
+      });
+      item.appendChild(delBtn);
+
+      list.appendChild(item);
+    });
+  }
+
+  function openUnavailModal(prefill) {
+    document.getElementById('unavailSaveStatus').textContent = '';
+    unavailCleanerSelect.value = prefill ? prefill.cleaner : cfg.CLEANERS[0].id;
+    document.getElementById('unavailStart').value = prefill ? prefill.start_date : '';
+    document.getElementById('unavailEnd').value = prefill ? prefill.end_date : '';
+    document.getElementById('unavailReason').value = prefill ? prefill.reason || '' : '';
+    unavailOverlay.classList.remove('hidden');
+    loadUnavailList();
+  }
+
+  function closeUnavailModal() {
+    unavailOverlay.classList.add('hidden');
+  }
+
+  document.getElementById('markUnavailableBtn').addEventListener('click', () => openUnavailModal(null));
+  document.getElementById('unavailModalClose').addEventListener('click', closeUnavailModal);
+  unavailOverlay.addEventListener('click', (e) => {
+    if (e.target === unavailOverlay) closeUnavailModal();
+  });
+
+  document.getElementById('unavailSaveBtn').addEventListener('click', async () => {
+    const statusEl = document.getElementById('unavailSaveStatus');
+    const cleaner = unavailCleanerSelect.value;
+    const start = document.getElementById('unavailStart').value;
+    const end = document.getElementById('unavailEnd').value;
+    const reason = document.getElementById('unavailReason').value.trim() || null;
+
+    if (!start || !end) {
+      statusEl.textContent = 'Start and end dates are required';
+      return;
+    }
+    if (end < start) {
+      statusEl.textContent = 'End date must be on or after start date';
+      return;
+    }
+
+    statusEl.textContent = 'Saving...';
+    const { error } = await db.from('cleaner_unavailability').insert({
+      cleaner,
+      start_date: start,
+      end_date: end,
+      reason,
+    });
+
+    if (error) {
+      console.error(error);
+      statusEl.textContent = 'Save failed - try again';
+      return;
+    }
+
+    statusEl.textContent = 'Added';
+    document.getElementById('unavailStart').value = '';
+    document.getElementById('unavailEnd').value = '';
+    document.getElementById('unavailReason').value = '';
+    await loadUnavailList();
     await refreshCalendar();
   });
 

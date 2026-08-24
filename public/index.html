@@ -17,9 +17,11 @@
     <span class="legend-item"><span class="dot" style="background:#00A699"></span>VRBO</span>
     <span class="legend-item"><span class="dot" style="background:#003580"></span>Booking.com</span>
     <span class="legend-item"><span class="dot" style="background:#cbd5e1"></span>Cleaning</span>
+    <span class="legend-item"><span class="dot" style="background:#fca5a5"></span>Unavailable</span>
   </div>
   <div class="header-actions">
     <span id="syncStatus" class="sync-status"></span>
+    <button id="markUnavailableBtn" class="btn btn-secondary">Mark Unavailable</button>
     <button id="syncNowBtn" class="btn btn-secondary">Sync Now</button>
   </div>
 </header>
@@ -85,6 +87,47 @@
       <textarea id="issueDescription" rows="2" placeholder="Describe the issue (damage, missing item, low supplies...)"></textarea>
       <input id="issuePhotoInput" type="file" accept="image/*" />
       <button id="reportIssueBtn" class="btn btn-warning">Report Issue</button>
+    </section>
+  </div>
+</div>
+
+<div id="unavailModalOverlay" class="modal-overlay hidden">
+  <div class="modal" role="dialog" aria-modal="true">
+    <button id="unavailModalClose" class="modal-close" aria-label="Close">&times;</button>
+
+    <h2>Cleaner Unavailability</h2>
+    <p class="modal-subtitle">Block off dates a cleaner can't take a job (vacation, sick, etc.)</p>
+
+    <section class="modal-section">
+      <label for="unavailCleaner">Cleaner</label>
+      <select id="unavailCleaner"></select>
+    </section>
+
+    <section class="modal-section">
+      <label for="unavailStart">Start date</label>
+      <input id="unavailStart" type="date" />
+    </section>
+
+    <section class="modal-section">
+      <label for="unavailEnd">End date</label>
+      <input id="unavailEnd" type="date" />
+    </section>
+
+    <section class="modal-section">
+      <label for="unavailReason">Reason (optional)</label>
+      <input id="unavailReason" type="text" placeholder="e.g. Vacation" />
+    </section>
+
+    <section class="modal-section">
+      <button id="unavailSaveBtn" class="btn btn-primary">Add</button>
+      <span id="unavailSaveStatus" class="save-status"></span>
+    </section>
+
+    <hr />
+
+    <section class="modal-section">
+      <label>Existing entries</label>
+      <div id="unavailList" class="issues-list"></div>
     </section>
   </div>
 </div>
