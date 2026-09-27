@@ -112,11 +112,11 @@ Things to know:
    npm run track
    ```
 
-6. Schedule it daily (runs only while you're logged in to Windows):
+6. Schedule it for weekdays at 9am (runs only while you're logged in to Windows; pass -Time or -Days to change it):
 
    ```powershell
    cd tracker
-   powershell -ExecutionPolicy Bypass -File .\schedule-task.ps1 -Time 7:30am
+   powershell -ExecutionPolicy Bypass -File .\schedule-task.ps1 -Time 9:00am
    ```
 
    Output goes to `tracker/tracker.log`.
