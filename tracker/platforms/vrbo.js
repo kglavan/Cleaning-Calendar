@@ -113,7 +113,13 @@ export async function scrape(page, { url, ourId, maxPages, humanWaitMs }) {
   let pageSize = null;
 
   for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-    await scrollUntilStable(page, '[data-stid="lodging-card-responsive"]');
+    // VRBO sometimes renders only a few cards at first and loads the rest
+    // after a pause, so give a short page one more pass before trusting it.
+    let loaded = await scrollUntilStable(page, '[data-stid="lodging-card-responsive"]');
+    if (loaded < 10) {
+      await sleep(4000);
+      await scrollUntilStable(page, '[data-stid="lodging-card-responsive"]');
+    }
     const cards = (await readCards(page)).map(parseCard).filter((c) => c.listingId);
     let onThisPage = 0;
     for (const card of cards) {

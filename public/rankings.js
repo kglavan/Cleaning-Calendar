@@ -14,6 +14,9 @@
   // Our listing's size, used to pick like-for-like competitors for pricing.
   // Read from our own search card when we have one; this is the fallback.
   const DEFAULT_OUR_BEDROOMS = 3;
+  // Never suggest moving more than this fraction in one step; big jumps are
+  // shown as a first step with the market figure alongside.
+  const MAX_PRICE_STEP = 0.2;
 
   let searches = [];
   let bookings = []; // read-only: the turnover calendar's synced bookings, for availability
@@ -608,6 +611,13 @@
       } else {
         target = aim;
         why = daysOut <= 10 ? 'not on page 1, check-in soon - price to fill' : 'not on page 1 - move into the lower-middle of similar listings';
+      }
+    }
+    if (ourNight !== null && target !== null) {
+      const capped = Math.min(ourNight * (1 + MAX_PRICE_STEP), Math.max(ourNight * (1 - MAX_PRICE_STEP), target));
+      if (Math.round(capped) !== Math.round(target)) {
+        why += ` (first step of ${Math.round(MAX_PRICE_STEP * 100)}% - similar page-1 listings are around ${money(target)}/night)`;
+        target = capped;
       }
     }
     return { target, ourNight, why };
