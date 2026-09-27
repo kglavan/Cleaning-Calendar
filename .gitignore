@@ -2,3 +2,8 @@ node_modules/
 .vercel
 .env
 .env.local
+
+# Rank tracker (runs locally, not on Vercel)
+tracker/.env
+tracker/.chrome-profile/
+tracker/tracker.log

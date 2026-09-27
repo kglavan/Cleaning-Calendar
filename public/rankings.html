@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Search Rankings</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="rankings.css" />
+</head>
+<body>
+
+<header class="app-header">
+  <h1>Search Rankings</h1>
+  <div class="header-actions">
+    <span id="lastRun" class="sync-status"></span>
+    <button id="addSearchBtn" class="btn btn-primary">Add Search</button>
+  </div>
+</header>
+
+<main>
+  <div class="view-tabs" role="tablist">
+    <button id="tabGrid" class="view-tab active" role="tab" aria-selected="true">Grid</button>
+    <button id="tabCalendar" class="view-tab" role="tab" aria-selected="false">Calendar</button>
+  </div>
+
+  <section id="calendarView" class="hidden">
+    <div class="panel">
+      <div class="cal-controls">
+        <label>Search <select id="calLabel"></select></label>
+        <label>Guests <select id="calMix"></select></label>
+        <div class="cal-nav">
+          <button id="calPrev" class="btn btn-secondary" aria-label="Previous month">&larr;</button>
+          <strong id="calMonth"></strong>
+          <button id="calNext" class="btn btn-secondary" aria-label="Next month">&rarr;</button>
+        </div>
+      </div>
+      <div class="cal-legend">
+        <span><span class="chip good">p1</span> page 1</span>
+        <span><span class="chip warn">p2</span> page 2–3</span>
+        <span><span class="chip bad">p4+</span> page 4+ / not found</span>
+        <span><span class="cal-swatch booked"></span> booked</span>
+        <span class="muted">A = Airbnb · V = VRBO · B = Booking.com, from the latest check of the stay covering that night</span>
+      </div>
+      <div id="calGrid" class="cal-grid"></div>
+    </div>
+
+    <div class="panel">
+      <h3 style="margin-top:0">Open dates &amp; suggested prices</h3>
+      <p class="hint" style="margin-top:0">Prices are the all-in stay totals guests see in search (nightly rate plus
+        cleaning and service fees), turned into a per-night figure. Your fees don't change with the rate, so a
+        change of $X per night here is a change of about $X to your nightly rate. Suggestions compare you with the
+        page-1 listings of a similar size (bedrooms within one of yours) for the same dates.</p>
+      <div id="openings"></div>
+    </div>
+  </section>
+
+  <div id="gridView">
+  <p id="emptyState" class="empty-state hidden">
+    No saved searches yet. Click <strong>Add Search</strong> to track where you rank for a
+    guest search (e.g. "Air Force Academy, 4 guests, open dates") on each platform. The
+    tracker on your PC checks them once a day.
+  </p>
+
+  <div id="searchGroups"></div>
+
+  <section id="detail" class="panel hidden">
+    <div class="detail-head">
+      <div>
+        <h2 id="detailTitle"></h2>
+        <p id="detailSubtitle" class="modal-subtitle"></p>
+      </div>
+      <button id="detailClose" class="modal-close" aria-label="Close">&times;</button>
+    </div>
+
+    <div class="chart-wrap"><canvas id="rankChart" aria-label="Rank history"></canvas></div>
+
+    <h3>You vs. page 1</h3>
+    <div id="compareStats" class="stat-row"></div>
+    <ul id="insights" class="insights"></ul>
+
+    <div class="stay-pick">
+      <h3>Page 1 on <span id="detailRunDate"></span> for</h3>
+      <select id="stayPicker" aria-label="Stay"></select>
+    </div>
+    <div class="table-scroll">
+      <table class="comp-table">
+        <thead>
+          <tr><th>#</th><th>Listing</th><th>Price</th><th>Rating</th><th>Reviews</th><th>Badges</th></tr>
+        </thead>
+        <tbody id="compBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  </div>
+
+  <section class="panel">
+    <h3 style="margin-top:0">Saved searches</h3>
+    <div class="table-scroll">
+      <table class="comp-table">
+        <thead>
+          <tr><th>Platform</th><th>Label</th><th>Place</th><th>Guests</th><th>Dates</th><th>Pages</th><th></th></tr>
+        </thead>
+        <tbody id="searchList"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div id="searchModalOverlay" class="modal-overlay hidden">
+  <div class="modal modal-wide" role="dialog" aria-modal="true">
+    <button id="searchModalClose" class="modal-close" aria-label="Close">&times;</button>
+    <h2>Add Search</h2>
+    <p class="modal-subtitle">Checked every day in a fresh incognito-style browser. One search runs per platform, guest mix, and stay.</p>
+
+    <section class="modal-section">
+      <label for="sLabel">Label</label>
+      <input id="sLabel" type="text" placeholder="e.g. Air Force Academy" />
+    </section>
+
+    <section class="modal-section">
+      <label>Platforms &amp; place name on each site</label>
+      <div class="platform-rows">
+        <label class="platform-row"><input type="checkbox" data-platform="airbnb" checked /> <span>Airbnb</span>
+          <input type="text" data-location="airbnb" placeholder="USAF Academy, CO" /></label>
+        <label class="platform-row"><input type="checkbox" data-platform="vrbo" checked /> <span>VRBO</span>
+          <input type="text" data-location="vrbo" placeholder="US Air Force Academy" /></label>
+        <label class="platform-row"><input type="checkbox" data-platform="booking" checked /> <span>Booking.com</span>
+          <input type="text" data-location="booking" placeholder="Monument, Colorado" /></label>
+      </div>
+      <p class="hint">Sites resolve place names differently. For the most faithful result, run the search yourself in an
+        incognito window and paste that page's URL here. The tracker swaps in its own dates and guests but keeps
+        the area and filters. Note: Booking.com matches "Air Force Academy" to a single hotel, so use Monument there.</p>
+    </section>
+
+    <section class="modal-section">
+      <label>Guest mixes</label>
+      <div id="mixChips" class="mix-chips"></div>
+      <div class="mix-add">
+        <select id="mixAdults" aria-label="Adults"></select>
+        <select id="mixKids" aria-label="Kids"></select>
+        <button id="mixAddBtn" type="button" class="btn btn-secondary">Add mix</button>
+      </div>
+    </section>
+
+    <section class="modal-section">
+      <label>Dates</label>
+      <div class="date-modes">
+        <label class="checkbox-label"><input type="radio" name="dateMode" value="calendar" checked /> Every open night (calendar view)</label>
+        <label class="checkbox-label"><input type="radio" name="dateMode" value="open_dates" /> A few open stays</label>
+        <label class="checkbox-label"><input type="radio" name="dateMode" value="fixed" /> Specific dates</label>
+      </div>
+      <div id="openDatesFields" class="field-row">
+        <section class="modal-section">
+          <label for="sNights">Nights per stay</label>
+          <input id="sNights" type="number" min="1" max="30" value="3" />
+        </section>
+        <section class="modal-section" id="windowsField">
+          <label for="sWindows">Stays to check</label>
+          <input id="sWindows" type="number" min="1" max="6" value="2" />
+        </section>
+        <section class="modal-section" id="horizonField">
+          <label for="sHorizon">Days ahead</label>
+          <input id="sHorizon" type="number" min="7" max="120" value="45" />
+        </section>
+      </div>
+      <div id="fixedDatesFields" class="field-row hidden">
+        <section class="modal-section">
+          <label for="sCheckin">Check-in</label>
+          <input id="sCheckin" type="date" />
+        </section>
+        <section class="modal-section">
+          <label for="sCheckout">Check-out</label>
+          <input id="sCheckout" type="date" />
+        </section>
+      </div>
+      <p id="datesHint" class="hint"></p>
+    </section>
+
+    <section class="modal-section">
+      <label for="sPages">Pages to scan</label>
+      <input id="sPages" type="number" min="1" max="15" value="5" style="max-width:120px" />
+    </section>
+
+    <section class="modal-section">
+      <p id="sVolume" class="hint"></p>
+      <button id="sSaveBtn" class="btn btn-primary">Save</button>
+      <span id="sSaveStatus" class="save-status"></span>
+    </section>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="rank-dates.js"></script>
+<script src="rankings.js"></script>
+</body>
+</html>

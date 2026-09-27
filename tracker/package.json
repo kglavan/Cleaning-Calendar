@@ -1,0 +1,16 @@
+{
+  "name": "rank-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runs saved OTA searches with a real browser and records where our listing ranks.",
+  "scripts": {
+    "track": "node run.js",
+    "install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.47.0"
+  }
+}
