@@ -282,15 +282,34 @@ async function main() {
   const browsers = openBrowsers();
   try {
     console.log(`Running ${jobs.length} search(es) at ${new Date().toLocaleString()}`);
-    for (const [i, { search, stay }] of jobs.entries()) {
-      if (i > 0) await jitter(8000, 20000);
+    // Once a platform's bot check has blocked this many searches in a row,
+    // skip its remaining searches this run: more attempts just get blocked
+    // (and each one waits for a human). Skipped searches aren't saved, so the
+    // Rankings page keeps showing that platform's last good results.
+    const maxBlocks = Number(process.env.MAX_CONSECUTIVE_BLOCKS ?? 2);
+    const blockedInARow = {};
+    const skipped = {};
+    let ran = 0;
+    for (const { search, stay } of jobs) {
+      if (maxBlocks > 0 && (blockedInARow[search.platform] || 0) >= maxBlocks) {
+        skipped[search.platform] = (skipped[search.platform] || 0) + 1;
+        continue;
+      }
+      if (ran++ > 0) await jitter(8000, 20000);
       const r = await runSearch(browsers, search, stay);
       console.log(describe(search, r));
+      blockedInARow[search.platform] = r.status === 'blocked' ? (blockedInARow[search.platform] || 0) + 1 : 0;
+      if (blockedInARow[search.platform] === maxBlocks) {
+        console.log(`  ${search.platform}: ${maxBlocks} bot checks in a row - skipping its remaining searches this run`);
+      }
       try {
         await saveSnapshot(db, search, r);
       } catch (err) {
         console.error(`  failed to save: ${err.message}`);
       }
+    }
+    for (const [platform, n] of Object.entries(skipped)) {
+      console.log(`Skipped ${n} ${platform} search(es) after repeated bot checks - they'll be retried on the mix's next turn.`);
     }
   } finally {
     await browsers.close();

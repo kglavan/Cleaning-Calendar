@@ -557,16 +557,21 @@
   }
 
   // For one label + guest mix: per platform, the newest snapshot covering
-  // each night (from each search's latest run).
+  // each night that actually has a result. A bot-check block or failed run
+  // doesn't hide an older real result; it only shows when nothing better
+  // exists for that night.
   function coverageFor(list) {
+    const hasResult = (s) => s.status === 'found' || s.status === 'not_found';
     const byPlatform = {};
     list.forEach((search) => {
-      const run = latestRun(snapshotsBySearch.get(search.id) || []);
       const nights = (byPlatform[search.platform] ??= new Map());
-      run.forEach((snap) => {
+      (snapshotsBySearch.get(search.id) || []).forEach((snap) => {
         for (let d = snap.checkin; d < snap.checkout; d = RD.addDays(d, 1)) {
           const prev = nights.get(d);
-          if (!prev || prev.run_at < snap.run_at) nights.set(d, snap);
+          const better = !prev
+            || (hasResult(snap) && !hasResult(prev))
+            || (hasResult(snap) === hasResult(prev) && prev.run_at < snap.run_at);
+          if (better) nights.set(d, snap);
         }
       });
     });
