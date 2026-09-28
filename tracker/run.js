@@ -157,6 +157,49 @@ function describe(search, r) {
   return `[${search.platform}] ${search.label} · ${guestText(search)} · ${r.checkin}→${r.checkout}: ${where} - scanned ${r.resultsScanned ?? 0}${r.error ? ` - ${r.error}` : ''}`;
 }
 
+// "Every open night" searches are expensive (one search per open stay), so
+// runs take turns: each run checks the MIXES_PER_RUN guest mixes (label +
+// adults + kids, across all platforms) whose latest results are oldest -
+// never-checked mixes first. Other date modes are cheap and run every time.
+// Pass --all to run everything.
+async function pickRotation(db, searches) {
+  const perRun = Number(process.env.MIXES_PER_RUN ?? 1);
+  const calendar = searches.filter((s) => s.date_mode === 'calendar');
+  const others = searches.filter((s) => s.date_mode !== 'calendar');
+  if (!calendar.length || perRun <= 0) return others;
+
+  const since = new Date(Date.now() - 60 * 86400000).toISOString();
+  const { data: snaps, error } = await db
+    .from('rank_snapshots')
+    .select('search_id, run_at')
+    .in('search_id', calendar.map((s) => s.id))
+    .gte('run_at', since)
+    .order('run_at', { ascending: false })
+    .limit(5000);
+  if (error) throw error;
+  const lastRun = new Map();
+  snaps.forEach((s) => {
+    if (!lastRun.has(s.search_id)) lastRun.set(s.search_id, s.run_at);
+  });
+
+  const groups = new Map();
+  calendar.forEach((s) => {
+    const key = `${s.label}|${s.adults}|${s.children}`;
+    const g = groups.get(key) ?? { key, searches: [], last: '' };
+    g.searches.push(s);
+    // A mix counts as fresh only when every platform in it has run.
+    const t = lastRun.get(s.id) ?? '';
+    g.last = g.searches.length === 1 ? t : t < g.last ? t : g.last;
+    groups.set(key, g);
+  });
+  const chosen = [...groups.values()].sort((a, b) => (a.last < b.last ? -1 : a.last > b.last ? 1 : 0)).slice(0, perRun);
+  chosen.forEach((g) => {
+    const s = g.searches[0];
+    console.log(`Rotation: ${s.label} · ${guestText(s)} (last checked ${g.last ? new Date(g.last).toLocaleDateString() : 'never'})`);
+  });
+  return [...others, ...chosen.flatMap((g) => g.searches)];
+}
+
 async function dryRun(browsers, args) {
   if (!PLATFORMS[args.platform] || !args.location) {
     throw new Error('--dry-run needs --platform airbnb|vrbo|booking and --location "City, ST"');
@@ -196,6 +239,7 @@ async function main() {
       adults: { type: 'string', default: '2' },
       children: { type: 'string', default: '0' },
       pages: { type: 'string', default: '5' },
+      all: { type: 'boolean', default: false },
     },
   });
 
@@ -224,7 +268,8 @@ async function main() {
     return;
   }
 
-  const jobs = searches.flatMap((search) => staysForSearch(search, bookings).map((stay) => ({ search, stay })));
+  const toRun = args.all ? searches : await pickRotation(db, searches);
+  const jobs = toRun.flatMap((search) => staysForSearch(search, bookings).map((stay) => ({ search, stay })));
 
   if (args['show-dates']) {
     for (const { search, stay } of jobs) {

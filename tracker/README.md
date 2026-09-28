@@ -43,6 +43,16 @@ open stretch in the next N days into stays of about the chosen length and
 checks each one, so one guest mix across three platforms is about 30 searches
 a day.
 
+**Guest mixes take turns.** Covering every open night for 90 days is
+about 23 stays × 3 platforms = ~69 searches per guest mix, roughly an hour.
+So each run checks only the "every open night" guest mix whose results are
+oldest, and never-checked mixes go first. With five mixes (4–8 guests) and a
+weekday schedule, each mix is refreshed about once a week. The Calendar
+tab's Guests dropdown shows when each mix was last checked. To change how many
+mixes run at once, set `MIXES_PER_RUN` in `tracker/.env`. To check every
+mix in one go, run `node run.js --all` (it takes hours, and VRBO will ask
+for bot checks).
+
 Below the calendar, each opening (weekly for long ones) gets a **suggested
 all-in price per night** for each platform. The suggestion compares your price
 with the page-1 listings for the same dates, preferring listings within one

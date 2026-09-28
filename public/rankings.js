@@ -17,6 +17,11 @@
   // Never suggest moving more than this fraction in one step; big jumps are
   // shown as a first step with the market figure alongside.
   const MAX_PRICE_STEP = 0.2;
+  // How far ahead the Calendar tab lists open dates.
+  const OPENINGS_DAYS = 90;
+  // Stays listed per grid cell before "+N more".
+  const GRID_STAYS_SHOWN = 6;
+  const guestCount = (m) => m.adults + m.children;
 
   let searches = [];
   let bookings = []; // read-only: the turnover calendar's synced bookings, for availability
@@ -205,7 +210,8 @@
           : el('div', { class: 'cell-head muted' }, search.active ? 'Waiting for first run' : 'Paused'),
         run.length > 1 || (run.length === 1 && !best)
           ? el('ul', { class: 'cell-stays' },
-            run.map((s) => el('li', null, el('span', { class: 'muted' }, stayLabel(s)), ' ', el('span', { class: `tone-${rankTone(s)}` }, rankShort(s)))))
+            run.slice(0, GRID_STAYS_SHOWN).map((s) => el('li', null, el('span', { class: 'muted' }, stayLabel(s)), ' ', el('span', { class: `tone-${rankTone(s)}` }, rankShort(s)))),
+            run.length > GRID_STAYS_SHOWN ? el('li', { class: 'muted' }, `+${run.length - GRID_STAYS_SHOWN} more stays - see Calendar`) : null)
           : run.length === 1
             ? el('div', { class: 'cell-stays muted' }, stayLabel(run[0]))
             : null
@@ -519,7 +525,20 @@
     });
     mixesHere.sort((a, b) => a.adults + a.children - (b.adults + b.children) || a.children - b.children);
     const keep = mixSel.value;
-    mixSel.replaceChildren(...mixesHere.map((m) => el('option', { value: mixKey(m) }, mixText(m))));
+    const lastChecked = (m) => {
+      let last = '';
+      searches.filter((s) => s.label === label && mixKey(s) === mixKey(m)).forEach((s) => {
+        const snaps = snapshotsBySearch.get(s.id) || [];
+        const t = snaps.length ? snaps[snaps.length - 1].run_at : '';
+        if (t > last) last = t;
+      });
+      return last;
+    };
+    mixSel.replaceChildren(...mixesHere.map((m) => {
+      const last = lastChecked(m);
+      return el('option', { value: mixKey(m) },
+        `${guestCount(m)} guests · ${mixText(m)} · ${last ? 'checked ' + shortDate(last) : 'not checked yet'}`);
+    }));
     if (mixesHere.some((m) => mixKey(m) === keep)) mixSel.value = keep;
   }
 
@@ -677,7 +696,7 @@
       openingsEl.replaceChildren(el('p', { class: 'muted' }, 'Add a search to see open dates here.'));
       return;
     }
-    const horizon = Math.max(45, ...list.map((s) => (s.date_mode === 'calendar' ? s.horizon_days : 0)));
+    const horizon = Math.max(OPENINGS_DAYS, ...list.map((s) => (s.date_mode === 'calendar' ? s.horizon_days : 0)));
     const gaps = RD.openGaps(bookings, today, RD.addDays(today, horizon));
     const snapIds = [...new Set(platforms.flatMap((p) => [...(coverage[p] ? coverage[p].values() : [])].map((s) => s.id)))];
     const compsBySnap = snapIds.length ? await loadPricingComps(snapIds) : new Map();
@@ -864,11 +883,16 @@
   function updateVolume() {
     const stays = staysPerSearch();
     const n = checkedPlatforms().length * mixes.length;
-    const perDay = n * stays;
-    const vrbo = checkedPlatforms().includes('vrbo') ? mixes.length * stays : 0;
+    // "Every open night" mixes take turns - each run checks one mix - so the
+    // per-run cost is one mix's worth; other modes run every mix every time.
+    const rotating = dateMode() === 'calendar';
+    const mixesPerRun = rotating ? Math.min(1, mixes.length) : mixes.length;
+    const perDay = checkedPlatforms().length * mixesPerRun * stays;
+    const vrbo = checkedPlatforms().includes('vrbo') ? mixesPerRun * stays : 0;
     document.getElementById('sVolume').textContent = n
-      ? `Creates ${n} saved search${n === 1 ? '' : 'es'} → about ${perDay} site search${perDay === 1 ? '' : 'es'} per daily run (~${Math.ceil((perDay * 45) / 60)} min).` +
-        (perDay > 60 ? ' That is a lot for one daily run - for the calendar view, one or two guest mixes is usually enough.' : '') +
+      ? `Creates ${n} saved search${n === 1 ? '' : 'es'} → about ${perDay} site search${perDay === 1 ? '' : 'es'} per run (~${Math.ceil((perDay * 45) / 60)} min).` +
+        (rotating && mixes.length > 1 ? ` Guest mixes take turns, one per weekday run, so each mix is refreshed about every ${mixes.length} weekdays.` : '') +
+        (perDay > 90 ? ' That is a long run - consider fewer days ahead or longer stays.' : '') +
         (vrbo > 6 ? ` That's ${vrbo} VRBO searches a day - more VRBO searches mean more bot checks, so consider fewer mixes there.` : '')
       : '';
   }
