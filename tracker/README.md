@@ -53,6 +53,19 @@ mixes run at once, set `MIXES_PER_RUN` in `tracker/.env`. To check every
 mix in one go, run `node run.js --all` (it takes hours, and VRBO will ask
 for bot checks).
 
+**VRBO is searched lightly.** VRBO starts asking "Bot or Not?" after a few
+searches close together, so:
+- it checks one stay per open Monday–Sunday week, about 12 for 90 days,
+  instead of every stay. The Calendar tab fills that week's other open nights
+  from that check, shown as a dashed "~" chip;
+- its searches are spread evenly through the run, at least 3 minutes apart
+  (`VRBO_MIN_GAP_MINUTES`);
+- when the check does appear, the Chrome window comes to the front and a
+  Windows notification asks you to clear it, then the tracker waits
+  `VRBO_HUMAN_WAIT_MINUTES`;
+- after 2 blocks in a row (`MAX_CONSECUTIVE_BLOCKS`), the rest of that run's
+  VRBO searches are skipped.
+
 Below the calendar, each opening (weekly for long ones) gets a **suggested
 all-in price per night** for each platform. The suggestion compares your price
 with the page-1 listings for the same dates, preferring listings within one

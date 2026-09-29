@@ -394,3 +394,6 @@ div.cell-stays { margin-top: 4px; }
 }
 .opening-part + .opening-part { margin-top: 10px; }
 .part-head { font-size: 12px; font-weight: 600; color: var(--muted); margin: 4px 0 2px; }
+
+/* Nights filled from that week's check (weekly-sampled platforms). */
+.chip.estimated { background: transparent; border: 1px dashed currentColor; }

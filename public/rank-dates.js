@@ -113,5 +113,24 @@
     return gaps;
   }
 
-  globalThis.RankDates = { isoDay, addDays, bookedNights, openStays, calendarStays, openGaps, staysForSearch };
+  // Monday of the week a date falls in - weeks run Monday to Sunday.
+  function weekOf(iso) {
+    const d = new Date(iso + 'T00:00:00Z');
+    return addDays(iso, -((d.getUTCDay() + 6) % 7));
+  }
+
+  // Keep only the first stay that checks in during each Monday-Sunday week.
+  // Used for platforms we sample lightly (VRBO), so each open week gets one
+  // check instead of one per stay.
+  function oneStayPerWeek(stays) {
+    const seen = new Set();
+    return stays.filter((s) => {
+      const w = weekOf(s.checkin);
+      if (seen.has(w)) return false;
+      seen.add(w);
+      return true;
+    });
+  }
+
+  globalThis.RankDates = { isoDay, addDays, bookedNights, openStays, calendarStays, openGaps, staysForSearch, weekOf, oneStayPerWeek };
 })();

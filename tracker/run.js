@@ -18,7 +18,7 @@ import * as airbnb from './platforms/airbnb.js';
 import * as vrbo from './platforms/vrbo.js';
 import * as booking from './platforms/booking.js';
 import { jitter } from './platforms/common.js';
-import { staysForSearch, addDays, isoDay } from './dates.js';
+import { staysForSearch, addDays, isoDay, oneStayPerWeek } from './dates.js';
 
 // Settings come from the same .env the turnover calendar uses (Supabase
 // project + the listing's iCal links), plus tracker/.env for anything the
@@ -157,6 +157,23 @@ function describe(search, r) {
   return `[${search.platform}] ${search.label} · ${guestText(search)} · ${r.checkin}→${r.checkout}: ${where} - scanned ${r.resultsScanned ?? 0}${r.error ? ` - ${r.error}` : ''}`;
 }
 
+// Spread lightly-searched platforms (those with minGapMs, i.e. VRBO) evenly
+// through the run instead of doing them back to back at the end.
+function interleave(jobs) {
+  const spaced = jobs.filter((j) => PLATFORMS[j.search.platform].minGapMs);
+  const rest = jobs.filter((j) => !PLATFORMS[j.search.platform].minGapMs);
+  if (!spaced.length || !rest.length) return jobs;
+  const out = [];
+  const every = rest.length / spaced.length;
+  let next = 0;
+  rest.forEach((job, i) => {
+    while (next < spaced.length && i >= Math.floor(next * every)) out.push(spaced[next++]);
+    out.push(job);
+  });
+  while (next < spaced.length) out.push(spaced[next++]);
+  return out;
+}
+
 // "Every open night" searches are expensive (one search per open stay), so
 // runs take turns: each run checks the MIXES_PER_RUN guest mixes (label +
 // adults + kids, across all platforms) whose latest results are oldest -
@@ -269,7 +286,11 @@ async function main() {
   }
 
   const toRun = args.all ? searches : await pickRotation(db, searches);
-  const jobs = toRun.flatMap((search) => staysForSearch(search, bookings).map((stay) => ({ search, stay })));
+  const jobs = interleave(toRun.flatMap((search) => {
+    let stays = staysForSearch(search, bookings);
+    if (search.date_mode === 'calendar' && PLATFORMS[search.platform].oneStayPerWeek) stays = oneStayPerWeek(stays);
+    return stays.map((stay) => ({ search, stay }));
+  }));
 
   if (args['show-dates']) {
     for (const { search, stay } of jobs) {
@@ -289,6 +310,7 @@ async function main() {
     const maxBlocks = Number(process.env.MAX_CONSECUTIVE_BLOCKS ?? 2);
     const blockedInARow = {};
     const skipped = {};
+    const lastRunAt = {};
     let ran = 0;
     for (const { search, stay } of jobs) {
       if (maxBlocks > 0 && (blockedInARow[search.platform] || 0) >= maxBlocks) {
@@ -296,6 +318,14 @@ async function main() {
         continue;
       }
       if (ran++ > 0) await jitter(8000, 20000);
+      // Keep at least minGapMs between searches on a spaced-out platform.
+      const gap = PLATFORMS[search.platform].minGapMs;
+      const since = Date.now() - (lastRunAt[search.platform] || 0);
+      if (gap && lastRunAt[search.platform] && since < gap) {
+        console.log(`  waiting ${Math.round((gap - since) / 1000)}s before the next ${search.platform} search`);
+        await new Promise((r) => setTimeout(r, gap - since));
+      }
+      lastRunAt[search.platform] = Date.now();
       const r = await runSearch(browsers, search, stay);
       console.log(describe(search, r));
       blockedInARow[search.platform] = r.status === 'blocked' ? (blockedInARow[search.platform] || 0) + 1 : 0;

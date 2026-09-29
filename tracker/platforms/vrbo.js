@@ -1,8 +1,14 @@
+import { spawn } from 'node:child_process';
 import { parseMoney, parseCount, scrollUntilStable, findBadges, jitter, sleep, pastedSearchUrl, CHILD_AGE, parseCapacity } from './common.js';
 
 export const key = 'vrbo';
 // VRBO blocks headless browsers outright, so it runs in a visible Chrome window.
 export const needsRealBrowser = true;
+// VRBO starts asking "Bot or Not?" after a few searches close together, so it
+// is searched lightly: "every open night" searches check one stay per open
+// week, and consecutive VRBO searches are spread out (run.js reads these).
+export const oneStayPerWeek = true;
+export const minGapMs = Number(process.env.VRBO_MIN_GAP_MINUTES ?? 3) * 60000;
 
 export function buildUrl(search, checkin, checkout) {
   // A pasted VRBO search URL carries the resolved regionId, which a plain
@@ -39,6 +45,28 @@ export function isOurs(listingId, ourId) {
 
 const BADGES = ['Premier Host', 'VIP Access', 'Member Price', 'Guest favorite', 'Great for families', 'Free cancellation'];
 
+// A Windows toast via PowerShell (no extra dependencies), shown under
+// PowerShell's own app id. Built from XML because indexing the template's
+// text nodes is unreliable in Windows PowerShell 5.1. Fire-and-forget: a
+// failed notification must never stop the run.
+export function notifyHumanCheck(minutes) {
+  if (process.platform !== 'win32') return;
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, "''");
+  const title = 'VRBO needs a human check';
+  const body = `Clear the "Bot or Not?" check in the Chrome window within ${minutes} min so the rank tracker can continue.`;
+  const xml = `<toast><visual><binding template="ToastGeneric"><text>${esc(title)}</text><text>${esc(body)}</text></binding></visual></toast>`;
+  const ps = [
+    "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null",
+    "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null",
+    "$d = New-Object Windows.Data.Xml.Dom.XmlDocument",
+    `$d.LoadXml('${xml}')`,
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show([Windows.UI.Notifications.ToastNotification]::new($d))",
+  ].join('; ');
+  try {
+    spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { stdio: 'ignore', detached: true, windowsHide: true }).unref();
+  } catch {}
+}
+
 async function isBlocked(page) {
   const title = await page.title().catch(() => '');
   return /bot or not/i.test(title);
@@ -49,6 +77,10 @@ async function isBlocked(page) {
 async function waitForHuman(page, waitMs) {
   if (!(await isBlocked(page))) return true;
   if (!waitMs) return false;
+  // Bring the window forward and pop a Windows notification so the check can
+  // be cleared by hand. The tracker never tries to solve it itself.
+  await page.bringToFront().catch(() => {});
+  notifyHumanCheck(Math.round(waitMs / 60000));
   console.log(`  VRBO is asking for a human check - clear it in the Chrome window (waiting up to ${Math.round(waitMs / 60000)} min)...`);
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {

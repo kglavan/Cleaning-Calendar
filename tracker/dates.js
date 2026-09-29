@@ -2,4 +2,4 @@
 // tracker use exactly the same rules.
 import '../public/rank-dates.js';
 
-export const { isoDay, addDays, bookedNights, openStays, calendarStays, openGaps, staysForSearch } = globalThis.RankDates;
+export const { isoDay, addDays, bookedNights, openStays, calendarStays, openGaps, staysForSearch, weekOf, oneStayPerWeek } = globalThis.RankDates;

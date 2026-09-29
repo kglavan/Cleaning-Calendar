@@ -474,6 +474,10 @@
   // ---------- Calendar view ----------
 
   const PLATFORM_LETTER = { airbnb: 'A', vrbo: 'V', booking: 'B' };
+  // The tracker checks these platforms once per open week (see
+  // tracker/platforms/vrbo.js), so other open nights that week show that
+  // week's result as an estimate.
+  const WEEKLY_SAMPLED = new Set(['vrbo']);
   let currentView = 'grid';
   let calMonth = null; // 'YYYY-MM'
   let calRenderToken = 0;
@@ -575,7 +579,36 @@
         }
       });
     });
+    // Weekly-sampled platforms: remember the best result per Monday-Sunday week.
+    Object.entries(byPlatform).forEach(([p, nights]) => {
+      if (!WEEKLY_SAMPLED.has(p)) return;
+      const weeks = new Map();
+      nights.forEach((snap, d) => {
+        const w = RD.weekOf(d);
+        const prev = weeks.get(w);
+        const better = !prev
+          || (hasResult(snap) && !hasResult(prev))
+          || (hasResult(snap) === hasResult(prev) && prev.run_at < snap.run_at);
+        if (better) weeks.set(w, snap);
+      });
+      nights.weeks = weeks;
+    });
     return byPlatform;
+  }
+
+  // The result for one platform on one night: its own check, or for a
+  // weekly-sampled platform, that week's check marked as an estimate.
+  function snapFor(coverage, p, iso) {
+    const nights = coverage[p];
+    if (!nights) return { snap: null, estimated: false };
+    const own = nights.get(iso);
+    const hasResult = (x) => x && (x.status === 'found' || x.status === 'not_found');
+    if (hasResult(own)) return { snap: own, estimated: false };
+    // No real result of its own (never checked, or blocked): use the week's
+    // real result if there is one, else whatever this night has.
+    const week = nights.weeks && nights.weeks.get(RD.weekOf(iso));
+    if (hasResult(week)) return { snap: week, estimated: true };
+    return { snap: own || week || null, estimated: false };
   }
 
   async function loadPricingComps(snapIds) {
@@ -679,10 +712,13 @@
       const booked = taken.has(iso);
       const chips = !past && !booked
         ? platforms.map((p) => {
-          const snap = coverage[p] && coverage[p].get(iso);
+          const { snap, estimated } = snapFor(coverage, p, iso);
           const text = !snap ? '–' : snap.status === 'found' ? `p${snap.page}` : snap.status === 'not_found' ? 'off' : '?';
-          const tip = !snap ? `${platformLabel(p)} · not checked yet` : `${platformLabel(p)} · ${stayLabel(snap)} · ${rankShort(snap)}`;
-          return el('span', { class: `chip ${snap ? rankTone(snap) : 'none'}`, title: tip }, `${PLATFORM_LETTER[p]} ${text}`);
+          const tip = !snap
+            ? `${platformLabel(p)} · not checked yet`
+            : `${platformLabel(p)} · ${stayLabel(snap)} · ${rankShort(snap)}${estimated ? ' · estimate from this week\'s check' : ''}`;
+          return el('span', { class: `chip ${snap ? rankTone(snap) : 'none'}${estimated ? ' estimated' : ''}`, title: tip },
+            `${PLATFORM_LETTER[p]} ${estimated ? '~' : ''}${text}`);
         })
         : [];
       cells.push(el('div', {
@@ -741,7 +777,7 @@
       // Distinct stays checked inside this gap for this platform.
       const snaps = [];
       for (let d = gap.start; d < gap.end; d = RD.addDays(d, 1)) {
-        const snap = coverage[p] && coverage[p].get(d);
+        const { snap } = snapFor(coverage, p, d);
         if (snap && !snaps.includes(snap)) snaps.push(snap);
       }
       const name = el('td', null, el('span', { class: 'dot', style: `background:${platformColor(p)};margin-right:6px` }), platformLabel(p));
