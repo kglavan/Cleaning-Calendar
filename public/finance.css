@@ -356,3 +356,14 @@ main {
 .pop-table td { padding: 5px 6px; border-bottom: 1px solid #f0f1f3; vertical-align: top; }
 .pop-table tr td:first-child { box-shadow: inset 4px 0 0 var(--bucket, transparent); padding-left: 10px; }
 .pop-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ---------- Combined expense list with column filters ---------- */
+
+.ledger-summary { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.ledger-table th.sortable { cursor: pointer; user-select: none; }
+.ledger-table th.sortable:hover { color: var(--text); }
+.ledger-table tr.filter-row th { padding: 4px 4px 8px; vertical-align: top; }
+.ledger-table tr.filter-row input,
+.ledger-table tr.filter-row select { width: 100%; min-width: 70px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 5px; font: inherit; font-size: 12px; font-weight: 400; background: var(--panel); }
+.ledger-table .filter-dates, .ledger-table .filter-range { display: flex; flex-direction: column; gap: 3px; min-width: 110px; }
+.ledger-table td.num { text-align: right; white-space: nowrap; }

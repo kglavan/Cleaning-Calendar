@@ -447,27 +447,213 @@
         .map(([p, h]) => stat(`${p}'s hours`, round2(h).toLocaleString(), 'entries they attended'))
     );
 
-    // Table.
-    const rows = [...acts].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-    document.getElementById('activityTable').replaceChildren(
-      el('thead', null, el('tr', null, ['Date', 'Bucket', 'Description', 'Who', 'Purpose', 'Location / vendor', 'Miles', 'Hours', 'Amount', 'Notes', ''].map((h) => el('th', null, h)))),
-      el('tbody', null, rows.length
-        ? rows.map((a) => el('tr', { class: 'bucketed', style: `--bucket:${FB.COLOR[a.bucket] || FB.COLOR.Other}` },
-          el('td', { class: 'nowrap' }, dayLabel(a.date)),
-          el('td', { class: 'nowrap' }, swatch(FB.COLOR[a.bucket] || FB.COLOR.Other), a.bucket || 'Other'),
-          el('td', null, a.description),
-          el('td', null, a.attendees || ''),
-          el('td', null, a.purpose || ''),
-          el('td', null, a.vendor || ''),
-          el('td', null, Number(a.miles) ? String(Number(a.miles)) : ''),
-          el('td', null, Number(a.hours) ? String(Number(a.hours)) : ''),
-          el('td', null, a.amount !== null ? money(Number(a.amount), true) : ''),
-          el('td', { class: 'muted' }, a.notes || ''),
-          el('td', { class: 'row-actions' },
-            el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => startEdit(a) }, 'Edit'),
-            el('button', { class: 'btn btn-warning', type: 'button', onclick: () => removeActivity(a) }, 'Remove'))))
-        : el('tr', null, el('td', { colspan: 11, class: 'muted' }, `No entries for ${year} yet.`)))
-    );
+    renderLedger();
+  }
+
+  // ---------- Combined expense list (activity log + Stessa) ----------
+
+  // One list of everything for the year: activity log entries (trips, hours,
+  // purchases) and every expense imported from Stessa. A log purchase and a
+  // Stessa transaction with the same amount within a week are the same
+  // expense, so they're merged into one row. Stessa's own mileage rows are
+  // left out - they copy the log's miles.
+  const MATCH_DAYS = 7;
+  // Words in log entries that aren't payee names.
+  const LEDGER_STOPWORDS = new Set(['autumn', 'star', 'point', 'kyle', 'stephanie', 'campbell', 'online', 'marketplace', 'listing', 'home', 'house', 'colorado', 'springs', 'monument', 'various']);
+  const daysApart = (a, b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
+
+  function ledgerRows() {
+    const acts = yearActivity();
+    const expenses = transactions.filter((t) => !t.excluded && yearOf(t.date) === year
+      && t.category !== 'Income' && t.category !== 'Transfers' && !isMileage(t));
+    const matchedTx = new Map(); // activity id -> transaction
+    const used = new Set();
+    // Names in the log entry (e.g. "Baylie", "Walmart") are used to prefer
+    // the transaction from the same payee - and when the name is a payee
+    // that appears in the transactions, to require it, so one cleaner's log
+    // entry is never paired with another cleaner's payment.
+    const squash = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+    const payees = expenses.map((t) => squash(`${t.description} ${t.notes || ''}`));
+    const names = (a) => `${a.vendor || ''} ${a.attendees || ''}`.toLowerCase().split(/[^a-z]+/)
+      .filter((w) => w.length >= 4 && !LEDGER_STOPWORDS.has(w));
+    [...acts].filter((a) => Number(a.amount) > 0).sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((a) => {
+      const cents = Math.round(Number(a.amount) * 100);
+      const words = names(a);
+      const sameName = (t) => words.some((w) => squash(`${t.description} ${t.notes || ''}`).includes(w));
+      const namedPayee = words.some((w) => payees.some((p) => p.includes(w)));
+      const hit = expenses
+        .filter((t) => !used.has(t.id) && Math.round(-Number(t.amount) * 100) === cents && daysApart(t.date, a.date) <= MATCH_DAYS)
+        .filter((t) => !namedPayee || sameName(t))
+        .sort((p, q) => (sameName(q) - sameName(p)) || daysApart(p.date, a.date) - daysApart(q.date, a.date))[0];
+      if (hit) {
+        used.add(hit.id);
+        matchedTx.set(a.id, hit);
+      }
+    });
+
+    const txSource = (t) => t.account || 'Stessa entry';
+    const txCategory = (t) => `${t.category || 'Uncategorized'}${t.sub_category ? ' · ' + t.sub_category : ''}`;
+    const rows = acts.map((a) => {
+      const t = matchedTx.get(a.id);
+      return {
+        key: `a${a.id}`,
+        date: a.date,
+        bucket: a.bucket || (t ? FB.bucketOf(t) : 'Other'),
+        description: [a.description, a.purpose].filter(Boolean).join(' - '),
+        payee: t ? t.description : a.vendor || '',
+        who: a.attendees || '',
+        category: t ? txCategory(t) : '',
+        source: t ? `Log + ${txSource(t)}` : 'Activity log',
+        miles: Number(a.miles) || 0,
+        hours: Number(a.hours) || 0,
+        amount: t ? Number(t.amount) : Number(a.amount) > 0 ? -Number(a.amount) : null,
+        notes: [a.notes, t && t.notes].filter(Boolean).join(' · '),
+        activity: a,
+      };
+    });
+    expenses.filter((t) => !used.has(t.id)).forEach((t) => rows.push({
+      key: `t${t.id}`,
+      date: t.date,
+      bucket: FB.bucketOf(t),
+      description: t.notes || '',
+      payee: t.description,
+      who: '',
+      category: txCategory(t),
+      source: txSource(t),
+      miles: 0,
+      hours: 0,
+      amount: Number(t.amount),
+      notes: '',
+      activity: null,
+    }));
+    return rows;
+  }
+
+  // Filters: one per column. Text filters match "contains" (case-insensitive).
+  const LEDGER_COLUMNS = [
+    { key: 'date', label: 'Date', filter: 'dates' },
+    { key: 'bucket', label: 'Bucket', filter: 'select' },
+    { key: 'description', label: 'Description', filter: 'text' },
+    { key: 'payee', label: 'Payee / vendor', filter: 'text' },
+    { key: 'who', label: 'Who', filter: 'text' },
+    { key: 'category', label: 'Category', filter: 'select' },
+    { key: 'source', label: 'Source', filter: 'select' },
+    { key: 'miles', label: 'Miles', filter: 'has' },
+    { key: 'hours', label: 'Hours', filter: 'has' },
+    { key: 'amount', label: 'Amount', filter: 'range' },
+    { key: 'notes', label: 'Notes', filter: 'text' },
+  ];
+  let ledgerFilters = {};
+  let ledgerSort = { key: 'date', dir: -1 };
+  try { ledgerFilters = JSON.parse(localStorage.getItem('finance.ledgerFilters') || '{}'); } catch {}
+  const saveFilters = () => { try { localStorage.setItem('finance.ledgerFilters', JSON.stringify(ledgerFilters)); } catch {} };
+
+  function passes(r) {
+    const f = ledgerFilters;
+    if (f.dateFrom && r.date < f.dateFrom) return false;
+    if (f.dateTo && r.date > f.dateTo) return false;
+    for (const c of LEDGER_COLUMNS) {
+      const v = f[c.key];
+      if (v === undefined || v === '') continue;
+      if (c.filter === 'text' && !String(r[c.key] || '').toLowerCase().includes(v.toLowerCase())) return false;
+      if (c.filter === 'select' && r[c.key] !== v) return false;
+      if (c.filter === 'has' && (v === 'yes' ? !r[c.key] : r[c.key])) return false;
+    }
+    // Amount range is on the size of the expense, whichever sign it has.
+    const size = r.amount === null ? null : Math.abs(r.amount);
+    if (f.amountMin !== undefined && f.amountMin !== '' && (size === null || size < Number(f.amountMin))) return false;
+    if (f.amountMax !== undefined && f.amountMax !== '' && (size === null || size > Number(f.amountMax))) return false;
+    return true;
+  }
+
+  function compare(a, b) {
+    const k = ledgerSort.key;
+    const x = a[k];
+    const y = b[k];
+    const empty = (v) => v === null || v === undefined || v === '';
+    if (empty(x) && empty(y)) return 0;
+    if (empty(x)) return 1;
+    if (empty(y)) return -1;
+    const r = typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y));
+    return r * ledgerSort.dir || (a.date < b.date ? 1 : -1);
+  }
+
+  function filterControl(c, rows) {
+    const f = ledgerFilters;
+    const set = (k) => (e) => { f[k] = e.target.value; saveFilters(); renderLedgerBody(); };
+    const attrs = (k, extra) => ({ 'aria-label': `Filter ${c.label}`, value: f[k] ?? '', oninput: set(k), ...extra });
+    if (c.filter === 'dates') {
+      return el('div', { class: 'filter-dates' },
+        el('input', attrs('dateFrom', { type: 'date', title: 'From' })),
+        el('input', attrs('dateTo', { type: 'date', title: 'To' })));
+    }
+    if (c.filter === 'select') {
+      const values = [...new Set(rows.map((r) => r[c.key]).filter(Boolean))].sort();
+      const sel = el('select', { 'aria-label': `Filter ${c.label}`, onchange: set(c.key) },
+        el('option', { value: '' }, 'All'), values.map((v) => el('option', { value: v }, v)));
+      sel.value = values.includes(f[c.key]) ? f[c.key] : '';
+      return sel;
+    }
+    if (c.filter === 'has') {
+      const sel = el('select', { 'aria-label': `Filter ${c.label}`, onchange: set(c.key) },
+        el('option', { value: '' }, 'All'), el('option', { value: 'yes' }, 'Has'), el('option', { value: 'no' }, 'None'));
+      sel.value = f[c.key] || '';
+      return sel;
+    }
+    if (c.filter === 'range') {
+      return el('div', { class: 'filter-range' },
+        el('input', attrs('amountMin', { type: 'number', step: '0.01', min: '0', placeholder: 'min' })),
+        el('input', attrs('amountMax', { type: 'number', step: '0.01', min: '0', placeholder: 'max' })));
+    }
+    return el('input', attrs(c.key, { type: 'search', placeholder: 'contains…' }));
+  }
+
+  let ledgerAll = [];
+
+  function renderLedger() {
+    ledgerAll = ledgerRows();
+    const head = el('thead', null,
+      el('tr', null, LEDGER_COLUMNS.map((c) => el('th', {
+        class: 'sortable',
+        'aria-sort': ledgerSort.key === c.key ? (ledgerSort.dir > 0 ? 'ascending' : 'descending') : null,
+        onclick: () => {
+          ledgerSort = { key: c.key, dir: ledgerSort.key === c.key ? -ledgerSort.dir : c.key === 'date' || c.key === 'amount' ? -1 : 1 };
+          renderLedger();
+        },
+      }, c.label, ledgerSort.key === c.key ? (ledgerSort.dir > 0 ? ' ▲' : ' ▼') : '')), el('th', null, '')),
+      el('tr', { class: 'filter-row' }, LEDGER_COLUMNS.map((c) => el('th', null, filterControl(c, ledgerAll))),
+        el('th', null, el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { ledgerFilters = {}; saveFilters(); renderLedger(); } }, 'Clear'))));
+    document.getElementById('activityTable').replaceChildren(head, el('tbody', { id: 'ledgerBody' }));
+    renderLedgerBody();
+  }
+
+  function renderLedgerBody() {
+    const rows = ledgerAll.filter(passes).sort(compare);
+    const body = document.getElementById('ledgerBody');
+    body.replaceChildren(...(rows.length
+      ? rows.map((r) => el('tr', { class: 'bucketed', style: `--bucket:${FB.COLOR[r.bucket] || FB.COLOR.Other}` },
+        el('td', { class: 'nowrap' }, dayLabel(r.date)),
+        el('td', { class: 'nowrap' }, swatch(FB.COLOR[r.bucket] || FB.COLOR.Other), r.bucket),
+        el('td', null, r.description),
+        el('td', null, r.payee),
+        el('td', null, r.who),
+        el('td', { class: 'muted' }, r.category),
+        el('td', { class: 'muted nowrap' }, r.source),
+        el('td', { class: 'num' }, r.miles ? String(r.miles) : ''),
+        el('td', { class: 'num' }, r.hours ? String(r.hours) : ''),
+        el('td', { class: `num${r.amount < 0 ? ' neg' : ''}` }, r.amount === null ? '' : money(r.amount)),
+        el('td', { class: 'muted' }, r.notes),
+        el('td', { class: 'row-actions' }, r.activity
+          ? [el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => startEdit(r.activity) }, 'Edit'),
+            el('button', { class: 'btn btn-warning', type: 'button', onclick: () => removeActivity(r.activity) }, 'Remove')]
+          : el('span', { class: 'muted', title: 'Imported from Stessa - change it there and re-import' }, 'Stessa'))))
+      : [el('tr', null, el('td', { colspan: LEDGER_COLUMNS.length + 1, class: 'muted' }, 'Nothing matches these filters.'))]));
+
+    const spent = rows.reduce((s, r) => s + (r.amount === null ? 0 : Math.round(r.amount * 100)), 0) / 100;
+    const miles = rows.reduce((s, r) => s + r.miles, 0);
+    const hours = rows.reduce((s, r) => s + r.hours, 0);
+    document.getElementById('ledgerSummary').textContent =
+      `Showing ${rows.length} of ${ledgerAll.length} · ${money(spent)} · ${Math.round(miles).toLocaleString()} mi · ${round2(hours).toLocaleString()} h`;
   }
 
   function bookingEntry(b, trip) {
