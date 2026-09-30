@@ -458,6 +458,8 @@
   // expense, so they're merged into one row. Stessa's own mileage rows are
   // left out - they copy the log's miles.
   const MATCH_DAYS = 7;
+  // Payment handles that belong to a person in the log (PayPal/Venmo names).
+  const PAYEE_ALIASES = { seahorsefig: 'Emma Bolander' };
   // Words in log entries that aren't payee names.
   const LEDGER_STOPWORDS = new Set(['autumn', 'star', 'point', 'kyle', 'stephanie', 'campbell', 'online', 'marketplace', 'listing', 'home', 'house', 'colorado', 'springs', 'monument', 'various']);
   const daysApart = (a, b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
@@ -473,13 +475,19 @@
     // that appears in the transactions, to require it, so one cleaner's log
     // entry is never paired with another cleaner's payment.
     const squash = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
-    const payees = expenses.map((t) => squash(`${t.description} ${t.notes || ''}`));
+    // A transaction's payee text, plus the person behind known aliases.
+    const payeeText = (t) => {
+      const text = squash(`${t.description} ${t.notes || ''}`);
+      const alias = Object.entries(PAYEE_ALIASES).find(([handle]) => text.includes(handle));
+      return alias ? text + squash(alias[1]) : text;
+    };
+    const payees = expenses.map(payeeText);
     const names = (a) => `${a.vendor || ''} ${a.attendees || ''}`.toLowerCase().split(/[^a-z]+/)
       .filter((w) => w.length >= 4 && !LEDGER_STOPWORDS.has(w));
     [...acts].filter((a) => Number(a.amount) > 0).sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((a) => {
       const cents = Math.round(Number(a.amount) * 100);
       const words = names(a);
-      const sameName = (t) => words.some((w) => squash(`${t.description} ${t.notes || ''}`).includes(w));
+      const sameName = (t) => words.some((w) => payeeText(t).includes(w));
       const namedPayee = words.some((w) => payees.some((p) => p.includes(w)));
       const hit = expenses
         .filter((t) => !used.has(t.id) && Math.round(-Number(t.amount) * 100) === cents && daysApart(t.date, a.date) <= MATCH_DAYS)
