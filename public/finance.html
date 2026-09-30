@@ -37,7 +37,7 @@
 
     <div class="panel">
       <h3 style="margin-top:0">Profit &amp; loss by month</h3>
-      <p class="hint" style="margin-top:0">From the bank, card and Venmo transactions imported from Stessa. Transfers (card payments, moving money between accounts) are left out so nothing is counted twice.</p>
+      <p class="hint" style="margin-top:0">From the bank, card and Venmo transactions imported from Stessa. Transfers (card payments, moving money between accounts) are left out so nothing is counted twice. Expenses are grouped into your workbook's color-coded buckets. Hover over any number to see the transactions behind it; click it to keep the list open.</p>
       <div class="table-scroll"><table class="comp-table pl-table" id="plTable"></table></div>
     </div>
   </section>
@@ -55,6 +55,7 @@
       <form id="activityForm" class="form-grid" autocomplete="off">
         <div><label for="aDate">Date</label><input id="aDate" type="date" required /></div>
         <div class="wide"><label for="aDescription">Description</label><input id="aDescription" type="text" required placeholder="e.g. Home Cleaning" /></div>
+        <div><label for="aBucket">Bucket</label><select id="aBucket"></select></div>
         <div><label for="aAttendees">Who</label><input id="aAttendees" type="text" placeholder="Kyle, Stephanie" /></div>
         <div class="wide"><label for="aPurpose">Business purpose</label><input id="aPurpose" type="text" placeholder="Cleaning After Guests" /></div>
         <div class="wide"><label for="aVendor">Location / vendor</label><input id="aVendor" type="text" placeholder="1143 Autumn Star Point" /></div>
@@ -124,6 +125,7 @@
 </main>
 
 <script src="config.js"></script>
+<script src="finance-buckets.js"></script>
 <script src="finance-import.js"></script>
 <script src="finance.js"></script>
 </body>

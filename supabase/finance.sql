@@ -101,3 +101,10 @@ insert into public.fin_settings (key, value) values
   ('mileage_rate', '{"2025": 0.70}'::jsonb),
   ('cleaning_trip', '{"miles": 55, "hours": 3}'::jsonb)
 on conflict (key) do nothing;
+
+-- ============================================================
+-- Expense buckets (the color-coded groups from the expenses workbook).
+-- fin_activity rows carry the bucket the owner assigned; transactions get
+-- theirs from category rules on the Finance page.
+-- ============================================================
+alter table public.fin_activity add column if not exists bucket text;

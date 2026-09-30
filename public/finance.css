@@ -322,3 +322,37 @@ main {
   .fin-controls select { margin-left: 0; }
 }
 .comp-table td.nowrap { white-space: nowrap; }
+
+/* ---------- Expense buckets (colors from the expenses workbook) ---------- */
+
+.bucket-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 7px; vertical-align: -1px; flex: none; }
+.pl-table tr.bucket-row td { font-weight: 600; background: color-mix(in srgb, var(--bucket) 12%, var(--panel)); }
+.pl-table tr.bucket-row td:first-child { box-shadow: inset 4px 0 0 var(--bucket); }
+.pl-table tr.sub td:first-child { box-shadow: inset 4px 0 0 color-mix(in srgb, var(--bucket, transparent) 45%, transparent); }
+.comp-table tr.bucketed td:first-child { box-shadow: inset 4px 0 0 var(--bucket); }
+.form-grid select { width: 100%; padding: 7px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 14px; background: var(--panel); }
+
+/* Numbers you can hover (or click / tab to) for the transactions behind them. */
+.pl-table td.hoverable { cursor: help; }
+.pl-table td.hoverable:hover, .pl-table td.hoverable:focus { background: #e8f0fe; outline: none; text-decoration: underline dotted; }
+
+.popover {
+  position: absolute;
+  z-index: 2000;
+  max-width: min(760px, calc(100vw - 16px));
+  max-height: 380px;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.pop-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin-bottom: 6px; }
+.pop-head span { color: var(--muted); }
+.pop-table { width: 100%; border-collapse: collapse; }
+.pop-table th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--border); position: sticky; top: -10px; background: var(--panel); }
+.pop-table td { padding: 5px 6px; border-bottom: 1px solid #f0f1f3; vertical-align: top; }
+.pop-table tr td:first-child { box-shadow: inset 4px 0 0 var(--bucket, transparent); padding-left: 10px; }
+.pop-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }

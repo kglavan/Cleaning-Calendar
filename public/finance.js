@@ -151,7 +151,12 @@
 
   // ---------- Overview: KPIs, chart, P&L ----------
 
-  const yearTx = () => transactions.filter((t) => !t.excluded && yearOf(t.date) === year && t.category !== 'Transfers');
+  const FB = window.FinanceBuckets;
+  const isMileage = (t) => t.sub_category === 'Mileage';
+  // Cash transactions for the year: no transfers (card payments etc.) and no
+  // Stessa mileage entries - mileage isn't cash; it's shown separately from
+  // the activity log, which is the complete mileage record.
+  const yearTx = () => transactions.filter((t) => !t.excluded && yearOf(t.date) === year && t.category !== 'Transfers' && !isMileage(t));
   const yearActivity = () => activity.filter((a) => !a.excluded && yearOf(a.date) === year);
 
   function byMonth(rows, pick = (t) => t.amount) {
@@ -160,102 +165,235 @@
     return m;
   }
   const sum = (arr) => arr.reduce((s, n) => s + n, 0);
+  const total = (rows) => sum(rows.map((t) => Number(t.amount)));
+  const swatch = (color) => el('span', { class: 'bucket-dot', style: `background:${color}` });
 
   function renderOverview() {
     const tx = yearTx();
     const income = tx.filter((t) => t.category === 'Income');
-    const opex = tx.filter((t) => !NOT_OPEX.has(t.category));
-    const mortgage = tx.filter((t) => t.category === 'Mortgages & Loans');
-    const capex = tx.filter((t) => t.category === 'Capital Expenses');
+    const expenses = tx.filter((t) => t.category !== 'Income');
+    const mortgage = expenses.filter((t) => t.category === 'Mortgages & Loans');
+    const opex = expenses.filter((t) => !NOT_OPEX.has(t.category));
     const acts = yearActivity();
     const miles = sum(acts.map((a) => Number(a.miles)));
     const hours = sum(acts.map((a) => Number(a.hours)));
     const rate = mileageRate(year);
-
-    const incomeM = byMonth(income);
-    const opexM = byMonth(opex);
-    const mortM = byMonth(mortgage);
-    const capexM = byMonth(capex);
-    const netM = incomeM.map((v, i) => v + opexM[i] + mortM[i] + capexM[i]);
+    const net = total(income) + total(expenses);
 
     const kpi = (label, value, sub, tone) =>
       el('div', { class: 'kpi' }, el('div', { class: 'stat-label' }, label), el('div', { class: `stat-value ${tone || ''}` }, value), sub ? el('div', { class: 'stat-sub' }, sub) : null);
     document.getElementById('kpis').replaceChildren(
-      kpi('Rental income', money(sum(incomeM)), `${year} to date`),
-      kpi('Operating expenses', money(-sum(opexM)), 'utilities, cleaning, HOA, supplies…'),
-      kpi('Mortgage', money(-sum(mortM)), 'principal + interest'),
-      kpi('Net cash flow', money(sum(netM)), 'income - all of the above', sum(netM) >= 0 ? 'good' : 'bad'),
+      kpi('Rental income', money(total(income)), `${year} to date`),
+      kpi('Operating expenses', money(-total(opex)), 'utilities, cleaning, HOA, supplies…'),
+      kpi('Mortgage', money(-total(mortgage)), 'principal + interest'),
+      kpi('Net cash flow', money(net), 'income minus all expenses', net >= 0 ? 'good' : 'bad'),
       kpi('Miles logged', Math.round(miles).toLocaleString(), rate ? `≈ ${money(miles * rate)} deduction at $${rate}/mi` : 'set the mileage rate on the Taxes tab'),
       kpi('Hours logged', round2(hours).toLocaleString(), 'material participation log')
     );
 
-    renderChart(incomeM, opexM.map((v, i) => v + mortM[i] + capexM[i]), netM);
-    renderPl(tx, { incomeM, opexM, mortM, capexM, netM }, acts, rate);
+    renderChart(income, expenses);
+    renderPl(income, expenses, acts, rate);
   }
 
-  function renderChart(incomeM, costM, netM) {
+  // Income bars next to expense bars stacked by bucket (in the workbook's
+  // colors), with the net cash flow line on top.
+  function renderChart(income, expenses) {
+    const incomeM = byMonth(income);
+    const expenseM = byMonth(expenses);
+    const bucketSets = FB.BUCKETS
+      .map((b) => ({ b, m: byMonth(expenses.filter((t) => FB.bucketOf(t) === b.name)) }))
+      .filter(({ m }) => sum(m.map(Math.abs)) >= 0.5)
+      .map(({ b, m }) => ({ type: 'bar', label: b.name, stack: 'expenses', data: m.map((v) => round2(-v)), backgroundColor: b.color }));
+
     if (chart) chart.destroy();
     chart = new Chart(document.getElementById('cashChart'), {
       data: {
         labels: MONTHS,
         datasets: [
-          { type: 'bar', label: 'Income', data: incomeM.map(round2), backgroundColor: '#2e9e5b' },
-          { type: 'bar', label: 'Expenses incl. mortgage', data: costM.map((v) => round2(-v)), backgroundColor: '#e5484d' },
-          { type: 'line', label: 'Net cash flow', data: netM.map(round2), borderColor: '#1f6feb', backgroundColor: '#1f6feb', tension: 0.2 },
+          { type: 'bar', label: 'Income', stack: 'income', data: incomeM.map(round2), backgroundColor: FB.INCOME.color },
+          ...bucketSets,
+          { type: 'line', label: 'Net cash flow', stack: 'net', data: incomeM.map((v, i) => round2(v + expenseM[i])), borderColor: '#111827', backgroundColor: '#111827', tension: 0.2 },
         ],
       },
       options: {
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        scales: { y: { ticks: { callback: (v) => money(v) } } },
+        scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: (v) => money(v) } } },
         plugins: {
-          legend: { position: 'bottom' },
-          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${money(c.parsed.y)}` } },
+          legend: { position: 'bottom', labels: { boxWidth: 12 } },
+          tooltip: {
+            filter: (item) => Math.abs(item.parsed.y) >= 0.5,
+            callbacks: { label: (c) => `${c.dataset.label}: ${money(c.parsed.y)}` },
+          },
         },
       },
     });
   }
 
-  function renderPl(tx, t, acts, rate) {
+  // Every number in the P&L keeps the list of transactions (or activity
+  // entries) behind it, shown in a popup on hover.
+  let cellDetails = new Map();
+
+  function renderPl(income, expenses, acts, rate) {
+    cellDetails = new Map();
+    let nextKey = 0;
     const table = document.getElementById('plTable');
     const head = el('thead', null, el('tr', null, el('th', null, String(year)), MONTHS.map((m) => el('th', null, m)), el('th', null, 'Total')));
     const rows = [];
-    const row = (label, values, cls) => rows.push(el('tr', { class: cls || '' }, el('td', null, label), values.map(cell), cell(sum(values))));
+
+    const valueCell = (amount, detail) => {
+      if (Math.abs(amount) < 0.5 && !detail.rows.length) return el('td', { class: 'muted' }, '-');
+      const key = String(nextKey++);
+      cellDetails.set(key, detail);
+      return el('td', { class: `hoverable${amount < 0 ? ' neg' : ''}`, 'data-cell': key, tabindex: '0' }, money(amount));
+    };
+    // One P&L line: a cell per month plus a total, each with its transactions.
+    const line = (label, lineRows, opts = {}) => {
+      const cells = MONTHS.map((m, i) => {
+        const r = lineRows.filter((t) => monthOf(t.date) === i);
+        return valueCell(total(r), { kind: 'tx', title: `${label} · ${m} ${year}`, rows: r });
+      });
+      cells.push(valueCell(total(lineRows), { kind: 'tx', title: `${label} · all of ${year}`, rows: lineRows }));
+      rows.push(el('tr', { class: opts.cls || '', style: opts.color ? `--bucket:${opts.color}` : null },
+        el('td', null, opts.color ? swatch(opts.color) : null, label), cells));
+    };
     const section = (label) => rows.push(el('tr', { class: 'section' }, el('td', { colspan: 14 }, label)));
 
     section('Income');
-    const income = tx.filter((x) => x.category === 'Income');
     ['airbnb', 'vrbo', 'booking', 'direct'].forEach((p) => {
-      const m = byMonth(income.filter((x) => x.platform === p));
-      if (sum(m)) row(PLATFORM_LABELS[p], m, 'sub');
+      const r = income.filter((x) => x.platform === p);
+      if (r.length) line(PLATFORM_LABELS[p], r, { cls: 'sub', color: FB.INCOME.color });
     });
-    const other = byMonth(income.filter((x) => !x.platform));
-    if (sum(other)) row('Other income', other, 'sub');
-    row('Total income', t.incomeM, 'total');
+    const otherIncome = income.filter((x) => !x.platform);
+    if (otherIncome.length) line('Other income', otherIncome, { cls: 'sub', color: FB.INCOME.color });
+    line('Total income', income, { cls: 'total' });
 
-    section('Operating expenses');
-    const opex = tx.filter((x) => !NOT_OPEX.has(x.category));
-    const cats = [...new Set(opex.map((x) => x.category || 'Uncategorized'))].sort();
-    cats.forEach((c) => {
-      const inCat = opex.filter((x) => (x.category || 'Uncategorized') === c);
-      const subs = [...new Set(inCat.map((x) => x.sub_category || c))].sort();
-      subs.forEach((s) => row(s === c ? c : `${c} · ${s}`, byMonth(inCat.filter((x) => (x.sub_category || c) === s)), 'sub'));
+    section('Expenses by bucket');
+    FB.BUCKETS.forEach((b) => {
+      const inBucket = expenses.filter((t) => FB.bucketOf(t) === b.name);
+      if (!inBucket.length) return;
+      line(b.name, inBucket, { cls: 'bucket-row', color: b.color });
+      const subs = [...new Set(inBucket.map((t) => `${t.category || 'Uncategorized'} · ${t.sub_category || '-'}`))].sort();
+      subs.forEach((s) => line(s, inBucket.filter((t) => `${t.category || 'Uncategorized'} · ${t.sub_category || '-'}` === s), { cls: 'sub', color: b.color }));
     });
-    row('Total operating expenses', t.opexM, 'total');
+    line('Total expenses', expenses, { cls: 'total' });
 
-    section('Debt service & capital');
-    row('Mortgage & loans', t.mortM, 'sub');
-    if (sum(t.capexM)) row('Capital expenses', t.capexM, 'sub');
-
-    row('Net cash flow', t.netM, 'total');
+    line('Net cash flow', [...income, ...expenses], { cls: 'total' });
 
     if (rate) {
-      const milesM = byMonth(acts, (a) => a.miles);
-      rows.push(el('tr', { class: 'note' }, el('td', null, `Mileage deduction (estimate, not cash) @ $${rate}/mi`),
-        milesM.map((m) => el('td', null, m ? money(m * rate) : '-')), el('td', null, money(sum(milesM) * rate))));
+      const withMiles = acts.filter((a) => Number(a.miles) > 0);
+      const color = FB.COLOR['Parking / Mileage'];
+      const cells = MONTHS.map((m, i) => {
+        const r = withMiles.filter((a) => monthOf(a.date) === i);
+        const miles = sum(r.map((a) => Number(a.miles)));
+        return valueCell(miles * rate, { kind: 'miles', rate, title: `Mileage · ${m} ${year}`, rows: r });
+      });
+      cells.push(valueCell(sum(withMiles.map((a) => Number(a.miles))) * rate, { kind: 'miles', rate, title: `Mileage · all of ${year}`, rows: withMiles }));
+      rows.push(el('tr', { class: 'note', style: `--bucket:${color}` },
+        el('td', null, swatch(color), `Mileage deduction (estimate, not cash) @ $${rate}/mi`), cells));
     }
     table.replaceChildren(head, el('tbody', null, rows));
   }
+
+  // ---------- Hover popup for P&L numbers ----------
+
+  const popover = el('div', { class: 'popover hidden', role: 'dialog', 'aria-live': 'polite' });
+  document.body.appendChild(popover);
+  let showTimer = null;
+  let hideTimer = null;
+  let pinnedCell = null;
+  const POPUP_ROWS = 250;
+
+  function popoverContent(d) {
+    const rows = [...d.rows].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const shown = rows.slice(0, POPUP_ROWS);
+    if (d.kind === 'miles') {
+      const miles = sum(rows.map((a) => Number(a.miles)));
+      return [
+        el('div', { class: 'pop-head' }, el('strong', null, d.title),
+          el('span', null, `${rows.length} trip${rows.length === 1 ? '' : 's'} · ${Math.round(miles).toLocaleString()} mi × $${d.rate} = ${money(miles * d.rate, true)}`)),
+        el('table', { class: 'pop-table' },
+          el('thead', null, el('tr', null, ['Date', 'Description', 'Who', 'Purpose', 'Miles', 'Deduction'].map((h) => el('th', null, h)))),
+          el('tbody', null, shown.map((a) => el('tr', { style: `--bucket:${FB.COLOR[a.bucket] || FB.COLOR['Parking / Mileage']}` },
+            el('td', { class: 'nowrap' }, dayLabel(a.date)), el('td', null, a.description), el('td', null, a.attendees || ''),
+            el('td', null, a.purpose || ''), el('td', { class: 'num' }, String(Number(a.miles))), el('td', { class: 'num' }, money(a.miles * d.rate, true)))))),
+      ];
+    }
+    return [
+      el('div', { class: 'pop-head' }, el('strong', null, d.title),
+        el('span', null, `${rows.length} transaction${rows.length === 1 ? '' : 's'} · ${money(total(rows), true)}`)),
+      el('table', { class: 'pop-table' },
+        el('thead', null, el('tr', null, ['Date', 'Payee', 'Description', 'Amount', 'Category', 'Account'].map((h) => el('th', null, h)))),
+        el('tbody', null, shown.map((t) => {
+          const bucket = FB.bucketOf(t);
+          return el('tr', { style: `--bucket:${FB.COLOR[bucket]}` },
+            el('td', { class: 'nowrap' }, dayLabel(t.date)),
+            el('td', null, t.description),
+            el('td', { class: 'muted' }, t.notes || ''),
+            el('td', { class: `num${t.amount < 0 ? ' neg' : ''}` }, money(Number(t.amount), true)),
+            el('td', null, swatch(FB.COLOR[bucket]), `${t.category || 'Uncategorized'}${t.sub_category ? ' · ' + t.sub_category : ''}`),
+            el('td', { class: 'muted' }, t.account || 'Entered in Stessa'));
+        }))),
+      rows.length > POPUP_ROWS ? el('div', { class: 'hint' }, `Showing the first ${POPUP_ROWS} of ${rows.length}.`) : null,
+    ].filter(Boolean);
+  }
+
+  function showPopover(td) {
+    const d = cellDetails.get(td.dataset.cell);
+    if (!d) return;
+    popover.replaceChildren(...popoverContent(d));
+    popover.classList.remove('hidden');
+    // Place below the number, or above it if there's no room; keep on screen.
+    const r = td.getBoundingClientRect();
+    const pw = popover.offsetWidth;
+    const ph = popover.offsetHeight;
+    const left = Math.max(8, Math.min(window.scrollX + r.left + r.width / 2 - pw / 2, window.scrollX + document.documentElement.clientWidth - pw - 8));
+    const below = r.bottom + ph + 12 < window.innerHeight;
+    popover.style.left = `${left}px`;
+    popover.style.top = `${window.scrollY + (below ? r.bottom + 6 : r.top - ph - 6)}px`;
+  }
+
+  function hidePopover() {
+    popover.classList.add('hidden');
+    pinnedCell = null;
+  }
+
+  const plTable = document.getElementById('plTable');
+  plTable.addEventListener('mouseover', (e) => {
+    const td = e.target.closest('td[data-cell]');
+    if (!td || pinnedCell) return;
+    clearTimeout(hideTimer);
+    clearTimeout(showTimer);
+    showTimer = setTimeout(() => showPopover(td), 150);
+  });
+  plTable.addEventListener('mouseout', (e) => {
+    if (!e.target.closest('td[data-cell]') || pinnedCell) return;
+    clearTimeout(showTimer);
+    hideTimer = setTimeout(hidePopover, 250);
+  });
+  // Click (or Enter) pins the popup open so it can be scrolled; click again,
+  // click elsewhere or press Escape to close.
+  plTable.addEventListener('click', (e) => {
+    const td = e.target.closest('td[data-cell]');
+    if (!td) return;
+    e.stopPropagation();
+    if (pinnedCell === td) return hidePopover();
+    showPopover(td);
+    pinnedCell = td;
+  });
+  plTable.addEventListener('keydown', (e) => {
+    const td = e.target.closest('td[data-cell]');
+    if (td && e.key === 'Enter') { showPopover(td); pinnedCell = td; }
+  });
+  plTable.addEventListener('focusin', (e) => {
+    const td = e.target.closest('td[data-cell]');
+    if (td && !pinnedCell) showPopover(td);
+  });
+  popover.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  popover.addEventListener('mouseleave', () => { if (!pinnedCell) hideTimer = setTimeout(hidePopover, 250); });
+  popover.addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => { if (!popover.classList.contains('hidden')) hidePopover(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hidePopover(); });
 
   // ---------- Activity log ----------
 
@@ -306,10 +444,11 @@
     // Table.
     const rows = [...acts].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
     document.getElementById('activityTable').replaceChildren(
-      el('thead', null, el('tr', null, ['Date', 'Description', 'Who', 'Purpose', 'Location / vendor', 'Miles', 'Hours', 'Amount', 'Notes', ''].map((h) => el('th', null, h)))),
+      el('thead', null, el('tr', null, ['Date', 'Bucket', 'Description', 'Who', 'Purpose', 'Location / vendor', 'Miles', 'Hours', 'Amount', 'Notes', ''].map((h) => el('th', null, h)))),
       el('tbody', null, rows.length
-        ? rows.map((a) => el('tr', null,
+        ? rows.map((a) => el('tr', { class: 'bucketed', style: `--bucket:${FB.COLOR[a.bucket] || FB.COLOR.Other}` },
           el('td', { class: 'nowrap' }, dayLabel(a.date)),
+          el('td', { class: 'nowrap' }, swatch(FB.COLOR[a.bucket] || FB.COLOR.Other), a.bucket || 'Other'),
           el('td', null, a.description),
           el('td', null, a.attendees || ''),
           el('td', null, a.purpose || ''),
@@ -321,7 +460,7 @@
           el('td', { class: 'row-actions' },
             el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => startEdit(a) }, 'Edit'),
             el('button', { class: 'btn btn-warning', type: 'button', onclick: () => removeActivity(a) }, 'Remove'))))
-        : el('tr', null, el('td', { colspan: 10, class: 'muted' }, `No entries for ${year} yet.`)))
+        : el('tr', null, el('td', { colspan: 11, class: 'muted' }, `No entries for ${year} yet.`)))
     );
   }
 
@@ -334,6 +473,9 @@
       vendor: '1143 Autumn Star Point',
       miles: trip.miles,
       hours: trip.hours,
+      // Cleanings you do yourselves were colored General Supplies in the
+      // workbook; the red Cleaning bucket is for paid cleaners.
+      bucket: 'General Supplies',
       source: 'calendar',
       booking_uid: b.uid,
     };
@@ -370,12 +512,18 @@
     hours: document.getElementById('aHours'),
     amount: document.getElementById('aAmount'),
     notes: document.getElementById('aNotes'),
+    bucket: document.getElementById('aBucket'),
   };
+  form.bucket.replaceChildren(...FB.BUCKETS.map((b) => el('option', { value: b.name }, b.name)));
+  const showBucketColor = () => (form.bucket.style.borderLeft = `6px solid ${FB.COLOR[form.bucket.value] || FB.COLOR.Other}`);
+  form.bucket.addEventListener('change', showBucketColor);
 
   function startEdit(a) {
     editingId = a.id || null;
     pendingBookingUid = null;
     Object.entries(form).forEach(([k, input]) => (input.value = a[k] === null || a[k] === undefined ? '' : a[k]));
+    if (!form.bucket.value) form.bucket.value = 'General Supplies';
+    showBucketColor();
     document.getElementById('activityFormTitle').textContent = editingId ? 'Edit entry' : 'Add an entry';
     document.getElementById('aSave').textContent = editingId ? 'Save changes' : 'Add entry';
     document.getElementById('aCancel').classList.toggle('hidden', !editingId);
@@ -408,6 +556,7 @@
       hours: num(form.hours.value) ?? 0,
       amount: num(form.amount.value),
       notes: form.notes.value.trim() || null,
+      bucket: form.bucket.value || null,
     };
     status.textContent = 'Saving...';
     const { error } = editingId
