@@ -175,7 +175,7 @@
   const swatch = (color) => el('span', { class: 'bucket-dot', style: `background:${color}` });
 
   function renderOverview() {
-    const tx = yearTx();
+    const tx = [...yearTx(), ...matchActivity().logOnly.map(logExpense)];
     const income = tx.filter((t) => t.category === 'Income');
     const expenses = tx.filter((t) => t.category !== 'Income');
     const mortgage = expenses.filter((t) => t.category === 'Mortgages & Loans');
@@ -464,7 +464,10 @@
   const LEDGER_STOPWORDS = new Set(['autumn', 'star', 'point', 'kyle', 'stephanie', 'campbell', 'online', 'marketplace', 'listing', 'home', 'house', 'colorado', 'springs', 'monument', 'various']);
   const daysApart = (a, b) => Math.abs((new Date(a) - new Date(b)) / 86400000);
 
-  function ledgerRows() {
+  // Pairs activity-log purchases with the imported transaction for the same
+  // purchase. Returns the imported expenses, the pairs, and the log
+  // purchases that count on their own (no import covers them).
+  function matchActivity() {
     const acts = yearActivity();
     const expenses = transactions.filter((t) => !t.excluded && yearOf(t.date) === year
       && t.category !== 'Income' && t.category !== 'Transfers' && !isMileage(t));
@@ -482,23 +485,47 @@
       return alias ? text + squash(alias[1]) : text;
     };
     const payees = expenses.map(payeeText);
-    const names = (a) => `${a.vendor || ''} ${a.attendees || ''}`.toLowerCase().split(/[^a-z]+/)
-      .filter((w) => w.length >= 4 && !LEDGER_STOPWORDS.has(w));
+    const words = (s) => String(s || '').toLowerCase().split(/[^a-z]+/).filter((w) => w.length >= 4 && !LEDGER_STOPWORDS.has(w));
     [...acts].filter((a) => Number(a.amount) > 0).sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((a) => {
       const cents = Math.round(Number(a.amount) * 100);
-      const words = names(a);
-      const sameName = (t) => words.some((w) => payeeText(t).includes(w));
-      const namedPayee = words.some((w) => payees.some((p) => p.includes(w)));
+      // Vendor and people names both help pick the right transaction, but
+      // only a person being paid (a name in "Who", like a cleaner) is
+      // required - store words like "Park" also appear in unrelated payees.
+      const allNames = words(`${a.vendor || ''} ${a.attendees || ''}`);
+      const people = words(a.attendees);
+      const sameName = (t) => allNames.some((w) => payeeText(t).includes(w));
+      const samePerson = (t) => people.some((w) => payeeText(t).includes(w));
+      const namedPayee = people.some((w) => payees.some((p) => p.includes(w)));
       const hit = expenses
         .filter((t) => !used.has(t.id) && Math.round(-Number(t.amount) * 100) === cents && daysApart(t.date, a.date) <= MATCH_DAYS)
-        .filter((t) => !namedPayee || sameName(t))
+        .filter((t) => !namedPayee || samePerson(t))
         .sort((p, q) => (sameName(q) - sameName(p)) || daysApart(p.date, a.date) - daysApart(q.date, a.date))[0];
       if (hit) {
         used.add(hit.id);
         matchedTx.set(a.id, hit);
       }
     });
+    // Log purchases with no import match count as expenses themselves, unless
+    // they're ticked "already in a bank/card import" (a match the rules miss).
+    const logOnly = acts.filter((a) => Number(a.amount) > 0 && !matchedTx.has(a.id) && !a.already_imported);
+    return { acts, expenses, matchedTx, used, logOnly };
+  }
 
+  // A counted log purchase in the same shape as an imported transaction.
+  const logExpense = (a) => ({
+    id: `act-${a.id}`,
+    date: a.date,
+    description: a.vendor || a.description,
+    notes: [a.description, a.purpose].filter(Boolean).join(' - '),
+    amount: -Number(a.amount),
+    category: 'Activity log',
+    sub_category: a.bucket || 'Other',
+    account: 'Activity log (entered here)',
+    bucket: a.bucket || 'Other',
+  });
+
+  function ledgerRows() {
+    const { acts, expenses, matchedTx, used } = matchActivity();
     const txSource = (t) => t.account || 'Stessa entry';
     const txCategory = (t) => `${t.category || 'Uncategorized'}${t.sub_category ? ' · ' + t.sub_category : ''}`;
     const rows = acts.map((a) => {
@@ -511,11 +538,12 @@
         payee: t ? t.description : a.vendor || '',
         who: a.attendees || '',
         category: t ? txCategory(t) : '',
-        source: t ? `Log + ${txSource(t)}` : 'Activity log',
+        source: t ? `Log + ${txSource(t)}` : a.already_imported && Number(a.amount) > 0 ? 'Activity log (in an import)' : 'Activity log',
         miles: Number(a.miles) || 0,
         hours: Number(a.hours) || 0,
-        amount: t ? Number(t.amount) : Number(a.amount) > 0 ? -Number(a.amount) : null,
-        notes: [a.notes, t && t.notes].filter(Boolean).join(' · '),
+        amount: t ? Number(t.amount) : Number(a.amount) > 0 && !a.already_imported ? -Number(a.amount) : null,
+        notes: [a.notes, t && t.notes, !t && a.already_imported && Number(a.amount) > 0 ? `${money(Number(a.amount))} already counted from a bank/card import` : '']
+          .filter(Boolean).join(' · '),
         activity: a,
       };
     });
@@ -724,6 +752,7 @@
     Object.entries(form).forEach(([k, input]) => (input.value = a[k] === null || a[k] === undefined ? '' : a[k]));
     if (!form.bucket.value) form.bucket.value = 'General Supplies';
     showBucketColor();
+    document.getElementById('aImported').checked = !!a.already_imported;
     document.getElementById('activityFormTitle').textContent = editingId ? 'Edit entry' : 'Add an entry';
     document.getElementById('aSave').textContent = editingId ? 'Save changes' : 'Add entry';
     document.getElementById('aCancel').classList.toggle('hidden', !editingId);
@@ -757,6 +786,7 @@
       amount: num(form.amount.value),
       notes: form.notes.value.trim() || null,
       bucket: form.bucket.value || null,
+      already_imported: document.getElementById('aImported').checked,
     };
     status.textContent = 'Saving...';
     const { error } = editingId

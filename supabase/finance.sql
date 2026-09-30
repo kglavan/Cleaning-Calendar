@@ -108,3 +108,8 @@ on conflict (key) do nothing;
 -- theirs from category rules on the Finance page.
 -- ============================================================
 alter table public.fin_activity add column if not exists bucket text;
+
+-- Activity-log expenses count in the P&L unless the same purchase also came
+-- in from a bank/card import. Matching is automatic (same amount and payee
+-- within 7 days); this flag covers the cases it misses.
+alter table public.fin_activity add column if not exists already_imported boolean not null default false;

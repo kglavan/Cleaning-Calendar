@@ -37,7 +37,7 @@
 
     <div class="panel">
       <h3 style="margin-top:0">Profit &amp; loss by month</h3>
-      <p class="hint" style="margin-top:0">From the bank, card and Venmo transactions imported from Stessa. Transfers (card payments, moving money between accounts) are left out so nothing is counted twice. Expenses are grouped into your workbook's color-coded buckets. Hover over any number to see the transactions behind it; click it to keep the list open.</p>
+      <p class="hint" style="margin-top:0">From the bank, card and Venmo transactions imported from Stessa, plus expenses entered in the Activity log that no import covers (shown as &quot;Activity log&quot;). Transfers (card payments, moving money between accounts) are left out so nothing is counted twice. Expenses are grouped into your workbook's color-coded buckets. Hover over any number to see the transactions behind it; click it to keep the list open.</p>
       <div class="table-scroll"><table class="comp-table pl-table" id="plTable"></table></div>
     </div>
   </section>
@@ -61,15 +61,16 @@
         <div class="wide"><label for="aVendor">Location / vendor</label><input id="aVendor" type="text" placeholder="1143 Autumn Star Point" /></div>
         <div><label for="aMiles">Miles</label><input id="aMiles" type="number" min="0" step="1" /></div>
         <div><label for="aHours">Hours</label><input id="aHours" type="number" min="0" step="0.25" /></div>
-        <div><label for="aAmount">Amount (reference)</label><input id="aAmount" type="number" min="0" step="0.01" /></div>
+        <div><label for="aAmount">Amount ($)</label><input id="aAmount" type="number" min="0" step="0.01" /></div>
         <div class="wide"><label for="aNotes">Notes</label><input id="aNotes" type="text" /></div>
+        <div class="wide"><label class="checkbox-label"><input id="aImported" type="checkbox" /> Already in a bank/card import - don't count it again</label></div>
       </form>
       <div class="form-actions">
         <button id="aSave" class="btn btn-primary" type="button">Add entry</button>
         <button id="aCancel" class="btn btn-secondary hidden" type="button">Cancel edit</button>
         <span id="aStatus" class="save-status"></span>
       </div>
-      <p class="hint">The amount is for your reference only - the purchase itself is already in the bank/card transactions, so it isn't added to expenses again.</p>
+      <p class="hint">The amount counts as an expense in the P&amp;L - use this for purchases that won't come in from a bank or card import (e.g. Amazon on a card that isn't linked). If the same purchase does come in from an import (same amount and payee within 7 days), it's matched and counted once. If an import has it under a different amount or date, tick the box above.</p>
     </div>
 
     <div class="panel">

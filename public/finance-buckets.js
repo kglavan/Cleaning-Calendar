@@ -40,7 +40,9 @@
   ];
 
   function bucketOf(tx) {
-    const t = { d: tx.description || '', c: tx.category || '', s: tx.sub_category || '' };
+    // Expenses entered in the activity log carry the bucket chosen for them.
+    if (tx.bucket) return tx.bucket;
+    const t ={ d: tx.description || '', c: tx.category || '', s: tx.sub_category || '' };
     const hit = RULES.find(([test]) => test(t));
     return hit ? hit[1] : 'Other';
   }
