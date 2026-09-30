@@ -10,3 +10,4 @@ tracker/tracker.log
 
 # Finance history (personal financial data) stays local - the repo is public
 finance/data/
+Transactions*.csv

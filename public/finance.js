@@ -517,79 +517,7 @@
     );
   }
 
-  // ---------- Stessa CSV import ----------
-
-  function parseCsv(text) {
-    const rows = [];
-    let row = [];
-    let field = '';
-    let quoted = false;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      if (quoted) {
-        if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
-        else if (c === '"') quoted = false;
-        else field += c;
-      } else if (c === '"') quoted = true;
-      else if (c === ',') { row.push(field); field = ''; }
-      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
-      else if (c !== '\r') field += c;
-    }
-    if (field || row.length) { row.push(field); rows.push(row); }
-    return rows.filter((r) => r.some((f) => f.trim() !== ''));
-  }
-
-  const norm = (h) => h.toLowerCase().replace(/[^a-z]/g, '');
-  const COLUMNS = {
-    date: ['date', 'transactiondate', 'posteddate'],
-    description: ['description', 'name', 'payee', 'merchant'],
-    amount: ['amount'],
-    category: ['category', 'parentcategory', 'topcategory'],
-    sub_category: ['subcategory', 'subcat'],
-    property: ['property', 'propertyname'],
-    account: ['account', 'accountname', 'bankaccount'],
-    notes: ['notes', 'note', 'memo'],
-  };
-
-  function parseAmount(s) {
-    const t = String(s || '').trim();
-    if (!t) return null;
-    const negative = /^\(.*\)$/.test(t) || t.startsWith('-');
-    const n = Number(t.replace(/[^0-9.]/g, ''));
-    return Number.isFinite(n) ? (negative ? -n : n) : null;
-  }
-
-  function parseDate(s) {
-    const t = String(s || '').trim();
-    let m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-    m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-    if (m) {
-      const y = m[3].length === 2 ? `20${m[3]}` : m[3];
-      return `${y}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
-    }
-    return null;
-  }
-
-  // Drop bank reference numbers (ACH/PPD/CCD/WEB IDs, card/account digit runs).
-  function sanitize(desc) {
-    return String(desc || '')
-      .replace(/\b(PPD|CCD|WEB|TEL|ACH)\s*ID:?\s*\S+/gi, '')
-      .replace(/\b[A-Z0-9]*\d{6,}[A-Z0-9]*\b/gi, '')
-      // Long mixed letter/digit reference codes (e.g. Booking.com "ST-L1W5X6O4E7H6").
-      .replace(/\b[A-Z]{1,3}-(?=[A-Z0-9]*\d[A-Z0-9]*\d)[A-Z0-9]{6,}\b/gi, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
-  }
-
-  function platformOf(desc, category) {
-    if (category !== 'Income') return null;
-    if (/airbnb/i.test(desc)) return 'airbnb';
-    if (/vrbo|homeaway|expedia/i.test(desc)) return 'vrbo';
-    if (/booking\.com/i.test(desc)) return 'booking';
-    if (/venmo|zelle|direct|check|deposit/i.test(desc)) return 'direct';
-    return null;
-  }
+  // ---------- Stessa CSV import (rules live in finance-import.js) ----------
 
   async function sha(text) {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
@@ -603,53 +531,15 @@
     btn.classList.add('hidden');
     document.getElementById('importStatus').textContent = '';
 
-    const [header, ...rows] = parseCsv(text);
-    if (!header) {
+    const { rows: out, skipped, missing, header } = await window.FinanceImport.prepare(text, sha);
+    if (!header.length) {
       summary.textContent = 'That file is empty.';
       return;
     }
-    const idx = {};
-    const normalized = header.map(norm);
-    Object.entries(COLUMNS).forEach(([key, names]) => {
-      const i = normalized.findIndex((h) => names.includes(h));
-      if (i >= 0) idx[key] = i;
-    });
-    const missing = ['date', 'description', 'amount'].filter((k) => idx[k] === undefined);
     if (missing.length) {
       summary.replaceChildren(el('div', { class: 'neg' }, `Couldn't find the ${missing.join(', ')} column(s).`),
         el('div', { class: 'muted' }, `Columns in this file: ${header.join(' | ')}`));
       return;
-    }
-
-    const seen = {};
-    const out = [];
-    const skipped = [];
-    for (const r of rows) {
-      const get = (k) => (idx[k] === undefined ? '' : (r[idx[k]] || '').trim());
-      const date = parseDate(get('date'));
-      const amount = parseAmount(get('amount'));
-      const raw = get('description');
-      if (!date || amount === null || !raw) {
-        skipped.push(r);
-        continue;
-      }
-      const category = get('category') || null;
-      const account = get('account') || null;
-      const key = `${date}|${raw}|${amount}|${account}`;
-      seen[key] = (seen[key] || 0) + 1;
-      out.push({
-        id: await sha(`${key}|${seen[key]}`),
-        date,
-        description: sanitize(raw) || raw.slice(0, 40),
-        amount,
-        category,
-        sub_category: get('sub_category') || null,
-        property: get('property') || null,
-        account,
-        platform: platformOf(raw, category),
-        notes: get('notes') || null,
-        imported_at: new Date().toISOString(),
-      });
     }
 
     const existing = new Set(transactions.map((t) => t.id));
