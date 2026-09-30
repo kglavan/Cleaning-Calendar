@@ -7,3 +7,6 @@ node_modules/
 tracker/.env
 tracker/.chrome-profile/
 tracker/tracker.log
+
+# Finance history (personal financial data) stays local - the repo is public
+finance/data/

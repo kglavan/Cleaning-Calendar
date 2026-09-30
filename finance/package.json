@@ -1,0 +1,14 @@
+{
+  "name": "finance-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "One-off data tools for the Finance tab (run locally, not deployed).",
+  "scripts": {
+    "import-workbook": "node import-workbook.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
+    "dotenv": "^16.4.5"
+  }
+}

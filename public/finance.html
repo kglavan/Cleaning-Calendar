@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Finance</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="finance.css" />
+</head>
+<body>
+
+<header class="app-header">
+  <h1>Finance</h1>
+  <span id="dataStatus" class="sync-status"></span>
+</header>
+
+<main>
+  <div class="fin-controls">
+    <div class="view-tabs" role="tablist">
+      <button class="view-tab active" data-view="overview" role="tab">Overview</button>
+      <button class="view-tab" data-view="activity" role="tab">Activity log</button>
+      <button class="view-tab" data-view="taxes" role="tab">Taxes</button>
+      <button class="view-tab" data-view="import" role="tab">Import</button>
+    </div>
+    <select id="yearSelect" aria-label="Year"></select>
+  </div>
+
+  <!-- ================= Overview ================= -->
+  <section data-panel="overview">
+    <div id="kpis" class="kpi-row"></div>
+
+    <div class="panel">
+      <h3 style="margin-top:0">Monthly cash flow</h3>
+      <div class="chart-wrap" style="height:280px"><canvas id="cashChart" aria-label="Monthly income, expenses and net cash flow"></canvas></div>
+    </div>
+
+    <div class="panel">
+      <h3 style="margin-top:0">Profit &amp; loss by month</h3>
+      <p class="hint" style="margin-top:0">From the bank, card and Venmo transactions imported from Stessa. Transfers (card payments, moving money between accounts) are left out so nothing is counted twice.</p>
+      <div class="table-scroll"><table class="comp-table pl-table" id="plTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ================= Activity log ================= -->
+  <section data-panel="activity" class="hidden">
+    <div class="panel">
+      <h3 style="margin-top:0">From the cleaning calendar</h3>
+      <p class="hint" style="margin-top:0">Checkouts you (Kyle &amp; Stephanie) were assigned to clean that aren't in the log yet. Check the miles and hours, then add. Cleanings by Baylie or Emma aren't listed - their fee is already a transaction.</p>
+      <div id="suggestions"></div>
+    </div>
+
+    <div class="panel">
+      <h3 id="activityFormTitle" style="margin-top:0">Add an entry</h3>
+      <form id="activityForm" class="form-grid" autocomplete="off">
+        <div><label for="aDate">Date</label><input id="aDate" type="date" required /></div>
+        <div class="wide"><label for="aDescription">Description</label><input id="aDescription" type="text" required placeholder="e.g. Home Cleaning" /></div>
+        <div><label for="aAttendees">Who</label><input id="aAttendees" type="text" placeholder="Kyle, Stephanie" /></div>
+        <div class="wide"><label for="aPurpose">Business purpose</label><input id="aPurpose" type="text" placeholder="Cleaning After Guests" /></div>
+        <div class="wide"><label for="aVendor">Location / vendor</label><input id="aVendor" type="text" placeholder="1143 Autumn Star Point" /></div>
+        <div><label for="aMiles">Miles</label><input id="aMiles" type="number" min="0" step="1" /></div>
+        <div><label for="aHours">Hours</label><input id="aHours" type="number" min="0" step="0.25" /></div>
+        <div><label for="aAmount">Amount (reference)</label><input id="aAmount" type="number" min="0" step="0.01" /></div>
+        <div class="wide"><label for="aNotes">Notes</label><input id="aNotes" type="text" /></div>
+      </form>
+      <div class="form-actions">
+        <button id="aSave" class="btn btn-primary" type="button">Add entry</button>
+        <button id="aCancel" class="btn btn-secondary hidden" type="button">Cancel edit</button>
+        <span id="aStatus" class="save-status"></span>
+      </div>
+      <p class="hint">The amount is for your reference only - the purchase itself is already in the bank/card transactions, so it isn't added to expenses again.</p>
+    </div>
+
+    <div class="panel">
+      <h3 style="margin-top:0">Log for <span class="yearLabel"></span></h3>
+      <div id="activityTotals" class="stat-row" style="margin-bottom:14px"></div>
+      <div class="table-scroll"><table class="comp-table" id="activityTable"></table></div>
+    </div>
+  </section>
+
+  <!-- ================= Taxes ================= -->
+  <section data-panel="taxes" class="hidden">
+    <div class="panel">
+      <h3 style="margin-top:0">Quarterly occupancy tax - <span class="yearLabel"></span></h3>
+      <p class="hint" style="margin-top:0">Rental income received from each platform in the quarter (the payouts, as in your workbook) times the tax rates below.</p>
+      <div id="taxQuarters"></div>
+    </div>
+
+    <div class="panel">
+      <h3 style="margin-top:0">Rates</h3>
+      <div id="taxRates" class="form-grid"></div>
+      <div class="form-grid" style="margin-top:8px">
+        <div><label for="mileageRate">Mileage rate <span class="yearLabel"></span> ($/mile)</label><input id="mileageRate" type="number" min="0" step="0.005" /></div>
+      </div>
+      <div class="form-actions">
+        <button id="saveRates" class="btn btn-primary" type="button">Save rates</button>
+        <span id="ratesStatus" class="save-status"></span>
+      </div>
+      <p class="hint">Mileage rate is used for the "mileage deduction (estimate)" figures. Check the IRS standard rate for each year with your tax preparer.</p>
+    </div>
+  </section>
+
+  <!-- ================= Import ================= -->
+  <section data-panel="import" class="hidden">
+    <div class="panel">
+      <h3 style="margin-top:0">Import transactions from Stessa</h3>
+      <p class="hint" style="margin-top:0">In Stessa: Transactions &rarr; All Transactions &rarr; <strong>Export CSV</strong>. Then drop the file here. Re-importing the same months is safe - transactions already here are updated, not duplicated. Bank reference numbers are stripped before saving.</p>
+      <div id="dropZone" class="drop-zone">
+        Drop the Stessa CSV here, or <label style="color:var(--primary);cursor:pointer;text-decoration:underline">choose a file<input id="csvInput" type="file" accept=".csv,text/csv" class="hidden" /></label>
+      </div>
+      <div id="importSummary" class="import-summary"></div>
+      <div class="form-actions">
+        <button id="importBtn" class="btn btn-primary hidden" type="button">Import</button>
+        <span id="importStatus" class="save-status"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3 style="margin-top:0">Monthly bills check - <span class="yearLabel"></span></h3>
+      <p class="hint" style="margin-top:0">Recurring bills found per month. A gap usually means a missing import or an uncategorized transaction in Stessa.</p>
+      <div class="table-scroll"><table class="comp-table pl-table" id="billsTable"></table></div>
+    </div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script src="finance.js"></script>
+</body>
+</html>
