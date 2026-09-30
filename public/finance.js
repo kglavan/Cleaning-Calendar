@@ -12,10 +12,12 @@
   const BILLS = [
     { label: 'Mortgage', test: (t) => t.category === 'Mortgages & Loans' },
     { label: 'HOA', test: (t) => /hoa/i.test(t.sub_category || '') },
-    { label: 'Electric', test: (t) => /electric/i.test(t.sub_category || '') },
-    { label: 'Gas', test: (t) => /^gas$/i.test(t.sub_category || '') },
-    { label: 'Water & Sewer', test: (t) => /water/i.test(t.sub_category || '') },
-    { label: 'Internet / TV', test: (t) => /telephone|cable|internet/i.test(t.sub_category || '') },
+    // Matched on the company name too, since Stessa sometimes leaves the
+    // sub-category blank (e.g. the Jan 2026 electric bill).
+    { label: 'Electric', test: (t) => /electric/i.test(t.sub_category || '') || /mountain view electric/i.test(t.description) },
+    { label: 'Gas', test: (t) => /^gas$/i.test(t.sub_category || '') || /black hills/i.test(t.description) },
+    { label: 'Water & Sewer', test: (t) => /water/i.test(t.sub_category || '') || /woodmoor water/i.test(t.description) },
+    { label: 'Internet / TV', test: (t) => /telephone|cable|internet/i.test(t.sub_category || '') || /comcast|xfinity/i.test(t.description) },
     { label: 'PriceLabs', test: (t) => /pricelabs/i.test(t.description) },
   ];
   // Common spellings in the old workbook, so hours add up per person.
@@ -52,12 +54,15 @@
     return node;
   }
 
-  const money = (n, cents = false) => {
+  // Amounts always show exact cents; only chart axis labels are whole dollars.
+  const money = (n, cents = true) => {
     if (n === null || n === undefined || Number.isNaN(n)) return '-';
-    const s = Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 });
-    return (n < 0 ? '-$' : '$') + s;
+    // Round to the cent first so float leftovers never show as "-$0.00".
+    const v = cents ? Math.round(n * 100) / 100 : Math.round(n);
+    const s = Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 });
+    return (v < 0 ? '-$' : '$') + s;
   };
-  const cell = (n) => (Math.abs(n) < 0.5 ? el('td', { class: 'muted' }, '-') : el('td', { class: n < 0 ? 'neg' : '' }, money(n)));
+  const cell = (n) => (Math.abs(n) < 0.005 ? el('td', { class: 'muted' }, '-') : el('td', { class: n < 0 ? 'neg' : '' }, money(n)));
   const monthOf = (iso) => Number(iso.slice(5, 7)) - 1;
   const yearOf = (iso) => Number(iso.slice(0, 4));
   const round2 = (n) => Math.round(n * 100) / 100;
@@ -165,7 +170,8 @@
     return m;
   }
   const sum = (arr) => arr.reduce((s, n) => s + n, 0);
-  const total = (rows) => sum(rows.map((t) => Number(t.amount)));
+  // Summed in whole cents so totals are exact to the penny.
+  const total = (rows) => sum(rows.map((t) => Math.round(Number(t.amount) * 100))) / 100;
   const swatch = (color) => el('span', { class: 'bucket-dot', style: `background:${color}` });
 
   function renderOverview() {
@@ -202,7 +208,7 @@
     const expenseM = byMonth(expenses);
     const bucketSets = FB.BUCKETS
       .map((b) => ({ b, m: byMonth(expenses.filter((t) => FB.bucketOf(t) === b.name)) }))
-      .filter(({ m }) => sum(m.map(Math.abs)) >= 0.5)
+      .filter(({ m }) => sum(m.map(Math.abs)) >= 0.005)
       .map(({ b, m }) => ({ type: 'bar', label: b.name, stack: 'expenses', data: m.map((v) => round2(-v)), backgroundColor: b.color }));
 
     if (chart) chart.destroy();
@@ -218,11 +224,11 @@
       options: {
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
-        scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: (v) => money(v) } } },
+        scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: (v) => money(v, false) } } },
         plugins: {
           legend: { position: 'bottom', labels: { boxWidth: 12 } },
           tooltip: {
-            filter: (item) => Math.abs(item.parsed.y) >= 0.5,
+            filter: (item) => Math.abs(item.parsed.y) >= 0.005,
             callbacks: { label: (c) => `${c.dataset.label}: ${money(c.parsed.y)}` },
           },
         },
@@ -242,7 +248,7 @@
     const rows = [];
 
     const valueCell = (amount, detail) => {
-      if (Math.abs(amount) < 0.5 && !detail.rows.length) return el('td', { class: 'muted' }, '-');
+      if (Math.abs(amount) < 0.005 && !detail.rows.length) return el('td', { class: 'muted' }, '-');
       const key = String(nextKey++);
       cellDetails.set(key, detail);
       return el('td', { class: `hoverable${amount < 0 ? ' neg' : ''}`, 'data-cell': key, tabindex: '0' }, money(amount));
@@ -660,7 +666,7 @@
       el('tbody', null, BILLS.map((b) => {
         const m = byMonth(tx.filter(b.test));
         return el('tr', null, el('td', null, b.label), m.map((v, i) =>
-          Math.abs(v) >= 0.5 ? el('td', null, money(-v))
+          Math.abs(v) >= 0.005 ? el('td', null, money(-v))
             : el('td', { class: i <= lastMonth ? 'neg' : 'muted', title: i <= lastMonth ? 'Nothing found this month' : '' }, i <= lastMonth ? 'missing' : '-')));
       }))
     );
