@@ -70,6 +70,18 @@
       .trim();
   }
 
+  // Categories we always know better than a (possibly mis-set) Stessa
+  // category, matched on the raw bank description.
+  const CATEGORY_RULES = [
+    // Every mortgage payment is to Pennymac; one was once filed as a Transfer.
+    { test: /pennymac/i, category: 'Mortgages & Loans', sub_category: 'Mortgage Payment' },
+  ];
+
+  function applyRules(raw, category, subCategory) {
+    const rule = CATEGORY_RULES.find((r) => r.test.test(raw));
+    return rule ? { category: rule.category, sub_category: rule.sub_category } : { category, sub_category: subCategory };
+  }
+
   function platformOf(desc, category) {
     if (category !== 'Income') return null;
     if (/airbnb/i.test(desc)) return 'airbnb';
@@ -108,7 +120,7 @@
         skipped.push(r);
         continue;
       }
-      const category = get('category') || null;
+      const { category, sub_category } = applyRules(raw, get('category') || null, get('sub_category') || null);
       const account = [get('institution'), get('account')].filter(Boolean).join(' ') || null;
       const key = `${date}|${raw}|${amount}|${account}`;
       seen[key] = (seen[key] || 0) + 1;
@@ -120,7 +132,7 @@
         description: sanitize(raw) || raw.slice(0, 40),
         amount,
         category,
-        sub_category: get('sub_category') || null,
+        sub_category,
         property: get('property') || null,
         account,
         platform: platformOf(raw, category),
@@ -131,5 +143,5 @@
     return { rows, skipped, missing: [], header };
   }
 
-  globalThis.FinanceImport = { parseCsv, parseAmount, parseDate, sanitize, platformOf, prepare };
+  globalThis.FinanceImport = { parseCsv, parseAmount, parseDate, sanitize, platformOf, applyRules, prepare };
 })();
