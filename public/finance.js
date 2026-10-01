@@ -118,6 +118,17 @@
     return { ...t, paid_date: t.date, date: lastOfPrev };
   }
 
+  // Changes made to imported transactions on this page (e.g. HOA dues
+  // recategorized as a special assessment), keyed by transaction id. They
+  // live in fin_settings so a Stessa re-import never overwrites them.
+  const TX_EDIT_FIELDS = ['date', 'description', 'notes', 'category', 'sub_category', 'bucket', 'amount'];
+  const txEdits = () => settings.tx_edits || {};
+  function applyEdits(t) {
+    const e = txEdits()[t.id];
+    return e ? { ...t, ...e, original: t } : t;
+  }
+  const prepareTx = (rows) => rows.map(applyEdits).map(serviceMonth);
+
   async function loadAll() {
     const status = document.getElementById('dataStatus');
     try {
@@ -128,9 +139,9 @@
         db.from('bookings').select('uid, source, start_date, end_date, assigned_cleaner, cancelled').eq('cancelled', false),
       ]);
       if (set.error) throw set.error;
-      transactions = tx.map(serviceMonth);
       activity = act;
       settings = Object.fromEntries(set.data.map((r) => [r.key, r.value]));
+      transactions = prepareTx(tx);
       bookings = bk.data || [];
     } catch (err) {
       console.error(err);
@@ -540,7 +551,7 @@
 
   function ledgerRows() {
     const { acts, expenses, matchedTx, used } = matchActivity();
-    const txSource = (t) => t.account || 'Stessa entry';
+    const txSource = (t) => `${t.account || 'Stessa entry'}${t.original ? ' (edited)' : ''}`;
     const txCategory = (t) => `${t.category || 'Uncategorized'}${t.sub_category ? ' · ' + t.sub_category : ''}`;
     const rows = acts.map((a) => {
       const t = matchedTx.get(a.id);
@@ -558,6 +569,7 @@
         amount: t ? Number(t.amount) : Number(a.amount) > 0 && !a.already_imported ? -Number(a.amount) : null,
         // The cost entered in the log, shown even when it's counted from an import.
         logCost: Number(a.amount) > 0 ? -Number(a.amount) : null,
+        tx: t || null,
         notes: [a.notes, t && t.notes, !t && a.already_imported && Number(a.amount) > 0 ? `${money(Number(a.amount))} already counted from a bank/card import` : '']
           .filter(Boolean).join(' · '),
         activity: a,
@@ -577,6 +589,7 @@
       amount: Number(t.amount),
       notes: t.paid_date ? `Paid ${dayLabel(t.paid_date)}, counted in the month it covers` : '',
       activity: null,
+      tx: t,
     }));
     return rows;
   }
@@ -592,7 +605,7 @@
     { key: 'source', label: 'Source', filter: 'select' },
     { key: 'miles', label: 'Miles', filter: 'has' },
     { key: 'hours', label: 'Hours', filter: 'has' },
-    { key: 'amount', label: 'Amount', filter: 'range' },
+    { key: 'amount', label: 'Cost', filter: 'range' },
     { key: 'notes', label: 'Notes', filter: 'text' },
   ];
   let ledgerFilters = {};
@@ -695,7 +708,7 @@
     const rows = ledgerAll.filter(passes).sort(compare);
     const body = document.getElementById('ledgerBody');
     body.replaceChildren(...(rows.length
-      ? rows.map((r) => (r.key === editingLedgerKey && r.activity ? editRow(r) : el('tr', { class: 'bucketed', style: `--bucket:${FB.COLOR[r.bucket] || FB.COLOR.Other}` },
+      ? rows.map((r) => (r.key === editingLedgerKey ? editRow(r) : el('tr', { class: 'bucketed', style: `--bucket:${FB.COLOR[r.bucket] || FB.COLOR.Other}` },
         el('td', { class: 'nowrap' }, dayLabel(r.date)),
         el('td', { class: 'nowrap' }, swatch(FB.COLOR[r.bucket] || FB.COLOR.Other), r.bucket),
         el('td', null, r.description),
@@ -707,10 +720,9 @@
         el('td', { class: 'num' }, r.hours ? String(r.hours) : ''),
         costCell(r),
         el('td', { class: 'muted' }, r.notes),
-        el('td', { class: 'row-actions' }, r.activity
-          ? [el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { editingLedgerKey = r.key; renderLedgerBody(); } }, 'Edit'),
-            el('button', { class: 'btn btn-warning', type: 'button', onclick: () => removeActivity(r.activity) }, 'Remove')]
-          : el('span', { class: 'muted', title: 'Imported from Stessa - change it there and re-import' }, 'Stessa')))))
+        el('td', { class: 'row-actions' },
+          el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { editingLedgerKey = r.key; renderLedgerBody(); } }, 'Edit'),
+          r.activity ? el('button', { class: 'btn btn-warning', type: 'button', onclick: () => removeActivity(r.activity) }, 'Remove') : null))))
       : [el('tr', null, el('td', { colspan: LEDGER_COLUMNS.length + 1, class: 'muted' }, 'Nothing matches these filters.'))]));
 
     const spent = rows.reduce((s, r) => s + (r.amount === null ? 0 : Math.round(r.amount * 100)), 0) / 100;
@@ -720,70 +732,196 @@
       `Showing ${rows.length} of ${ledgerAll.length} · ${money(spent)} · ${Math.round(miles).toLocaleString()} mi · ${round2(hours).toLocaleString()} h`;
   }
 
-  // An activity-log row turned into inputs, edited in place in the table.
+  // A row turned into inputs, edited in place in the table. Activity-log
+  // fields save to the log; an imported transaction's fields (category,
+  // payee, cost...) save as edits on top of the Stessa data. A log purchase
+  // matched to a transaction edits both: the log entry, plus the
+  // transaction's category.
   function editRow(r) {
     const a = r.activity;
-    const input = (field, attrs = {}) => el('input', { class: 'cell-input', 'data-field': field, value: a[field] ?? '', ...attrs });
+    const t = r.tx;
+    const field = (src, name, attrs = {}) => el('input', { class: 'cell-input', 'data-field': name, value: src[name] ?? '', ...attrs });
+    const list = (id, values) => el('datalist', { id }, [...new Set(values.filter(Boolean))].sort().map((v) => el('option', { value: v })));
     const bucket = el('select', { class: 'cell-input', 'data-field': 'bucket' }, FB.BUCKETS.map((b) => el('option', { value: b.name }, b.name)));
-    bucket.value = a.bucket || 'General Supplies';
-    const imported = el('input', { type: 'checkbox', 'data-field': 'already_imported' });
-    imported.checked = !!a.already_imported;
-    const tr = el('tr', { class: 'bucketed editing', style: `--bucket:${FB.COLOR[bucket.value] || FB.COLOR.Other}` },
-      el('td', null, input('date', { type: 'date' })),
-      el('td', null, bucket),
-      el('td', null, input('description', { type: 'text', placeholder: 'Description' }), input('purpose', { type: 'text', placeholder: 'Business purpose' })),
-      el('td', null, input('vendor', { type: 'text', placeholder: 'Location / vendor' })),
-      el('td', null, input('attendees', { type: 'text', placeholder: 'Who' })),
-      el('td', { class: 'muted' }, r.category),
-      el('td', null, el('label', { class: 'cell-check', title: 'Tick if a bank/card import already has this purchase' }, imported, ' In an import')),
-      el('td', null, input('miles', { type: 'number', min: '0', step: '1' })),
-      el('td', null, input('hours', { type: 'number', min: '0', step: '0.25' })),
-      el('td', null, input('amount', { type: 'number', min: '0', step: '0.01', placeholder: 'Cost $' })),
-      el('td', null, input('notes', { type: 'text', placeholder: 'Notes' })),
+    bucket.value = a ? a.bucket || r.bucket || 'General Supplies' : r.bucket;
+
+    // Transaction inputs use "tx." field names; the cost is entered positive.
+    const txField = (name, attrs = {}) => el('input', { class: 'cell-input', 'data-field': `tx.${name}`, value: t[name] ?? '', ...attrs });
+    const category = t ? [
+      txField('category', { type: 'text', placeholder: 'Category', list: 'catList' }),
+      txField('sub_category', { type: 'text', placeholder: 'Sub-category', list: 'subList' }),
+      list('catList', transactions.map((x) => x.category)),
+      list('subList', transactions.map((x) => x.sub_category)),
+    ] : r.category;
+
+    let cells;
+    if (a) {
+      const imported = el('input', { type: 'checkbox', 'data-field': 'already_imported' });
+      imported.checked = !!a.already_imported;
+      cells = [
+        el('td', null, field(a, 'date', { type: 'date' })),
+        el('td', null, bucket),
+        el('td', null, field(a, 'description', { type: 'text', placeholder: 'Description' }), field(a, 'purpose', { type: 'text', placeholder: 'Business purpose' })),
+        el('td', null, field(a, 'vendor', { type: 'text', placeholder: 'Location / vendor' }), t ? el('div', { class: 'muted cell-note' }, t.description) : null),
+        el('td', null, field(a, 'attendees', { type: 'text', placeholder: 'Who' })),
+        el('td', null, category),
+        el('td', null, el('label', { class: 'cell-check', title: 'Tick if a bank/card import already has this purchase' }, imported, ' In an import')),
+        el('td', null, field(a, 'miles', { type: 'number', min: '0', step: '1' })),
+        el('td', null, field(a, 'hours', { type: 'number', min: '0', step: '0.25' })),
+        el('td', null, field(a, 'amount', { type: 'number', min: '0', step: '0.01', placeholder: 'Cost $' })),
+        el('td', null, field(a, 'notes', { type: 'text', placeholder: 'Notes' })),
+      ];
+    } else {
+      cells = [
+        el('td', null, el('input', { class: 'cell-input', 'data-field': 'tx.date', type: 'date', value: t.paid_date || t.date })),
+        el('td', null, bucket),
+        el('td', null, txField('notes', { type: 'text', placeholder: 'Description' })),
+        el('td', null, txField('description', { type: 'text', placeholder: 'Payee' })),
+        el('td', null, ''),
+        el('td', null, category),
+        el('td', { class: 'muted nowrap' }, r.source),
+        el('td', null, ''),
+        el('td', null, ''),
+        el('td', null, el('input', { class: 'cell-input', 'data-field': 'tx.amount', type: 'number', step: '0.01', value: round2(-Number(t.amount)), title: 'Cost (a refund is negative)' })),
+        el('td', { class: 'muted' }, t.original ? `Stessa has: ${t.original.category || 'Uncategorized'}${t.original.sub_category ? ' · ' + t.original.sub_category : ''}, ${money(Number(t.original.amount))}` : ''),
+      ];
+    }
+    const cancel = () => { editingLedgerKey = null; renderLedgerBody(); };
+    const tr = el('tr', { class: 'bucketed editing', style: `--bucket:${FB.COLOR[bucket.value] || FB.COLOR.Other}` }, cells,
       el('td', { class: 'row-actions' },
-        el('button', { class: 'btn btn-primary', type: 'button', onclick: () => saveRow(tr, a) }, 'Save'),
-        el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { editingLedgerKey = null; renderLedgerBody(); } }, 'Cancel'),
+        el('button', { class: 'btn btn-primary', type: 'button', onclick: () => saveRow(tr, r) }, 'Save'),
+        el('button', { class: 'btn btn-secondary', type: 'button', onclick: cancel }, 'Cancel'),
+        t && t.original ? el('button', { class: 'btn btn-warning', type: 'button', title: 'Undo the changes made here and go back to what Stessa has', onclick: () => revertTx(tr, t) }, 'Undo edits') : null,
         el('div', { class: 'save-status row-status' })));
-    bucket.addEventListener('change', () => tr.style.setProperty('--bucket', FB.COLOR[bucket.value] || FB.COLOR.Other));
-    tr.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target.tagName === 'INPUT') saveRow(tr, a);
-      if (e.key === 'Escape') { editingLedgerKey = null; renderLedgerBody(); }
+    // A new category picks its usual bucket, unless the bucket was chosen by hand.
+    let bucketTouched = false;
+    bucket.addEventListener('change', () => {
+      bucketTouched = true;
+      tr.style.setProperty('--bucket', FB.COLOR[bucket.value] || FB.COLOR.Other);
     });
-    setTimeout(() => tr.querySelector('[data-field="description"]').focus(), 0);
+    tr.addEventListener('input', (e) => {
+      if (!t || a || bucketTouched || !/^tx\.(category|sub_category|description)$/.test(e.target.dataset.field || '')) return;
+      const v = (f) => tr.querySelector(`[data-field="tx.${f}"]`).value.trim();
+      bucket.value = FB.bucketOf({ description: v('description'), category: v('category'), sub_category: v('sub_category') });
+      tr.style.setProperty('--bucket', FB.COLOR[bucket.value] || FB.COLOR.Other);
+    });
+    tr.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.tagName === 'INPUT') saveRow(tr, r);
+      if (e.key === 'Escape') cancel();
+    });
+    setTimeout(() => tr.querySelector('input:not([type=date])').focus(), 0);
     return tr;
   }
 
-  async function saveRow(tr, a) {
+  // Saves the edits for one transaction (null clears them). Reads the
+  // current edits first so changes saved from another tab aren't lost.
+  async function saveTxEdits(id, edits) {
+    const { data, error: readError } = await db.from('fin_settings').select('value').eq('key', 'tx_edits').maybeSingle();
+    if (readError) return readError;
+    const all = { ...((data && data.value) || {}) };
+    if (edits && Object.keys(edits).length) all[id] = edits;
+    else delete all[id];
+    const { error } = await db.from('fin_settings').upsert({ key: 'tx_edits', value: all, updated_at: new Date().toISOString() });
+    if (!error) settings.tx_edits = all;
+    return error;
+  }
+
+  async function reloadAfterEdit() {
+    const [tx, act] = await Promise.all([fetchAll('fin_transactions', '*', 'date'), fetchAll('fin_activity', '*', 'date')]);
+    transactions = prepareTx(tx);
+    activity = act;
+    renderAll();
+  }
+
+  async function saveRow(tr, r) {
+    const a = r.activity;
+    const t = r.tx;
     const status = tr.querySelector('.row-status');
     const val = (f) => tr.querySelector(`[data-field="${f}"]`);
     const text = (f) => val(f).value.trim() || null;
     const num = (f) => (val(f).value === '' ? null : Number(val(f).value));
-    if (!val('date').value || !text('description')) {
-      status.textContent = 'Date and description are required';
-      return;
+
+    let activityRow = null;
+    if (a) {
+      if (!val('date').value || !text('description')) {
+        status.textContent = 'Date and description are required';
+        return;
+      }
+      activityRow = {
+        date: val('date').value,
+        bucket: val('bucket').value,
+        description: text('description'),
+        purpose: text('purpose'),
+        vendor: text('vendor'),
+        attendees: text('attendees'),
+        miles: num('miles') ?? 0,
+        hours: num('hours') ?? 0,
+        amount: num('amount'),
+        notes: text('notes'),
+        already_imported: val('already_imported').checked,
+      };
     }
-    const row = {
-      date: val('date').value,
-      bucket: val('bucket').value,
-      description: text('description'),
-      purpose: text('purpose'),
-      vendor: text('vendor'),
-      attendees: text('attendees'),
-      miles: num('miles') ?? 0,
-      hours: num('hours') ?? 0,
-      amount: num('amount'),
-      notes: text('notes'),
-      already_imported: val('already_imported').checked,
-    };
+
+    // Only fields that differ from what Stessa has are kept as edits.
+    let edits = null;
+    if (t) {
+      const o = t.original || t;
+      const next = { ...o, ...(txEdits()[t.id] || {}) };
+      next.category = text('tx.category');
+      next.sub_category = text('tx.sub_category');
+      if (!a) {
+        if (!val('tx.date').value || !text('tx.description') || num('tx.amount') === null) {
+          status.textContent = 'Date, payee and cost are required';
+          return;
+        }
+        next.date = val('tx.date').value;
+        next.description = text('tx.description');
+        next.notes = text('tx.notes');
+        next.amount = round2(-num('tx.amount'));
+        // The bucket is kept only when it isn't the one the category gives.
+        next.bucket = val('bucket').value === FB.bucketOf({ ...next, bucket: null }) ? null : val('bucket').value;
+      }
+      edits = {};
+      TX_EDIT_FIELDS.forEach((k) => {
+        const before = k === 'amount' ? Number(o[k]) : o[k] ?? null;
+        const after = k === 'amount' ? Number(next[k]) : next[k] ?? null;
+        if (before !== after) edits[k] = next[k] ?? null;
+      });
+    }
+
     status.textContent = 'Saving...';
-    const { error } = await db.from('fin_activity').update(row).eq('id', a.id);
+    if (activityRow) {
+      const { error } = await db.from('fin_activity').update(activityRow).eq('id', a.id);
+      if (error) {
+        console.error(error);
+        status.textContent = 'Save failed - see console';
+        return;
+      }
+    }
+    if (t) {
+      const error = await saveTxEdits(t.id, edits);
+      if (error) {
+        console.error(error);
+        status.textContent = 'Save failed - see console';
+        return;
+      }
+    }
+    editingLedgerKey = null;
+    await reloadAfterEdit();
+  }
+
+  async function revertTx(tr, t) {
+    if (!confirm(`Undo your changes to "${t.original.description}" on ${dayLabel(t.original.date)} and go back to what Stessa has?`)) return;
+    const status = tr.querySelector('.row-status');
+    status.textContent = 'Saving...';
+    const error = await saveTxEdits(t.id, null);
     if (error) {
       console.error(error);
       status.textContent = 'Save failed - see console';
       return;
     }
     editingLedgerKey = null;
-    await reloadActivity();
+    await reloadAfterEdit();
   }
 
   function bookingEntry(b, trip) {
@@ -1052,7 +1190,7 @@
       status.textContent = `Imported ${pendingImport.length} transactions.`;
       pendingImport = null;
       btn.classList.add('hidden');
-      transactions = (await fetchAll('fin_transactions', '*', 'date')).map(serviceMonth);
+      transactions = prepareTx(await fetchAll('fin_transactions', '*', 'date'));
       renderYearOptions();
       renderAll();
     } catch (err) {

@@ -374,3 +374,4 @@ main {
 .ledger-table td:nth-child(3) .cell-input { min-width: 160px; }
 .ledger-table .cell-check { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
 .ledger-table .row-status { display: block; margin: 4px 0 0; }
+.ledger-table .cell-note { font-size: 11px; margin-bottom: 3px; }
