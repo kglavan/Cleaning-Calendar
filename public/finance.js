@@ -600,14 +600,18 @@
     { key: 'bucket', label: 'Bucket', filter: 'select' },
     { key: 'description', label: 'Description', filter: 'text' },
     { key: 'payee', label: 'Payee / vendor', filter: 'text' },
+    { key: 'amount', label: 'Cost', filter: 'range' },
     { key: 'who', label: 'Who', filter: 'text' },
     { key: 'category', label: 'Category', filter: 'select' },
     { key: 'source', label: 'Source', filter: 'select' },
     { key: 'miles', label: 'Miles', filter: 'has' },
     { key: 'hours', label: 'Hours', filter: 'has' },
-    { key: 'amount', label: 'Cost', filter: 'range' },
     { key: 'notes', label: 'Notes', filter: 'text' },
   ];
+  // Rows build their cells in this order; inColumnOrder lays them out in the
+  // order of LEDGER_COLUMNS.
+  const CELL_ORDER = ['date', 'bucket', 'description', 'payee', 'who', 'category', 'source', 'miles', 'hours', 'amount', 'notes'];
+  const inColumnOrder = (cells) => LEDGER_COLUMNS.map((c) => cells[CELL_ORDER.indexOf(c.key)]);
   let ledgerFilters = {};
   let ledgerSort = { key: 'date', dir: -1 };
   try { ledgerFilters = JSON.parse(localStorage.getItem('finance.ledgerFilters') || '{}'); } catch {}
@@ -678,16 +682,17 @@
   function renderLedger() {
     ledgerAll = ledgerRows();
     const head = el('thead', null,
-      el('tr', null, LEDGER_COLUMNS.map((c) => el('th', {
+      el('tr', null, el('th', null, ''), LEDGER_COLUMNS.map((c) => el('th', {
         class: 'sortable',
         'aria-sort': ledgerSort.key === c.key ? (ledgerSort.dir > 0 ? 'ascending' : 'descending') : null,
         onclick: () => {
           ledgerSort = { key: c.key, dir: ledgerSort.key === c.key ? -ledgerSort.dir : c.key === 'date' || c.key === 'amount' ? -1 : 1 };
           renderLedger();
         },
-      }, c.label, ledgerSort.key === c.key ? (ledgerSort.dir > 0 ? ' ▲' : ' ▼') : '')), el('th', null, '')),
-      el('tr', { class: 'filter-row' }, LEDGER_COLUMNS.map((c) => el('th', null, filterControl(c, ledgerAll))),
-        el('th', null, el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { ledgerFilters = {}; saveFilters(); renderLedger(); } }, 'Clear'))));
+      }, c.label, ledgerSort.key === c.key ? (ledgerSort.dir > 0 ? ' ▲' : ' ▼') : ''))),
+      el('tr', { class: 'filter-row' },
+        el('th', null, el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { ledgerFilters = {}; saveFilters(); renderLedger(); } }, 'Clear')),
+        LEDGER_COLUMNS.map((c) => el('th', null, filterControl(c, ledgerAll)))));
     document.getElementById('activityTable').replaceChildren(head, el('tbody', { id: 'ledgerBody' }));
     renderLedgerBody();
   }
@@ -709,6 +714,10 @@
     const body = document.getElementById('ledgerBody');
     body.replaceChildren(...(rows.length
       ? rows.map((r) => (r.key === editingLedgerKey ? editRow(r) : el('tr', { class: 'bucketed', style: `--bucket:${FB.COLOR[r.bucket] || FB.COLOR.Other}` },
+        el('td', { class: 'row-actions' },
+          el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { editingLedgerKey = r.key; renderLedgerBody(); } }, 'Edit'),
+          r.activity ? el('button', { class: 'btn btn-warning', type: 'button', onclick: () => removeActivity(r.activity) }, 'Remove') : null),
+        inColumnOrder([
         el('td', { class: 'nowrap' }, dayLabel(r.date)),
         el('td', { class: 'nowrap' }, swatch(FB.COLOR[r.bucket] || FB.COLOR.Other), r.bucket),
         el('td', null, r.description),
@@ -720,9 +729,7 @@
         el('td', { class: 'num' }, r.hours ? String(r.hours) : ''),
         costCell(r),
         el('td', { class: 'muted' }, r.notes),
-        el('td', { class: 'row-actions' },
-          el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { editingLedgerKey = r.key; renderLedgerBody(); } }, 'Edit'),
-          r.activity ? el('button', { class: 'btn btn-warning', type: 'button', onclick: () => removeActivity(r.activity) }, 'Remove') : null))))
+      ]))))
       : [el('tr', null, el('td', { colspan: LEDGER_COLUMNS.length + 1, class: 'muted' }, 'Nothing matches these filters.'))]));
 
     const spent = rows.reduce((s, r) => s + (r.amount === null ? 0 : Math.round(r.amount * 100)), 0) / 100;
@@ -787,12 +794,13 @@
       ];
     }
     const cancel = () => { editingLedgerKey = null; renderLedgerBody(); };
-    const tr = el('tr', { class: 'bucketed editing', style: `--bucket:${FB.COLOR[bucket.value] || FB.COLOR.Other}` }, cells,
+    const tr = el('tr', { class: 'bucketed editing', style: `--bucket:${FB.COLOR[bucket.value] || FB.COLOR.Other}` },
       el('td', { class: 'row-actions' },
         el('button', { class: 'btn btn-primary', type: 'button', onclick: () => saveRow(tr, r) }, 'Save'),
         el('button', { class: 'btn btn-secondary', type: 'button', onclick: cancel }, 'Cancel'),
         t && t.original ? el('button', { class: 'btn btn-warning', type: 'button', title: 'Undo the changes made here and go back to what Stessa has', onclick: () => revertTx(tr, t) }, 'Undo edits') : null,
-        el('div', { class: 'save-status row-status' })));
+        el('div', { class: 'save-status row-status' })),
+      inColumnOrder(cells));
     // A new category picks its usual bucket, unless the bucket was chosen by hand.
     let bucketTouched = false;
     bucket.addEventListener('change', () => {

@@ -371,7 +371,14 @@ main {
 /* Activity log rows edited in place */
 .ledger-table tr.editing td { background: #f3f7ff; vertical-align: top; }
 .ledger-table .cell-input { width: 100%; min-width: 70px; padding: 4px 6px; margin-bottom: 3px; border: 1px solid var(--border); border-radius: 5px; font: inherit; font-size: 12px; background: var(--panel); }
-.ledger-table td:nth-child(3) .cell-input { min-width: 160px; }
+.ledger-table td:nth-child(4) .cell-input { min-width: 160px; }
+/* The list scrolls inside its own box, so the sideways scrollbar and the
+   column names stay in view. */
+.ledger-scroll { max-height: 75vh; overflow: auto; }
+.ledger-scroll thead th { position: sticky; top: 0; z-index: 2; background: var(--panel); }
+.ledger-scroll thead tr.filter-row th { top: 34px; }
+.ledger-table .row-actions { white-space: nowrap; text-align: left; }
+.ledger-table td.row-actions .btn + .btn { margin-left: 4px; }
 .ledger-table .cell-check { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
 .ledger-table .row-status { display: block; margin: 4px 0 0; }
 .ledger-table .cell-note { font-size: 11px; margin-bottom: 3px; }
