@@ -556,6 +556,8 @@
         miles: Number(a.miles) || 0,
         hours: Number(a.hours) || 0,
         amount: t ? Number(t.amount) : Number(a.amount) > 0 && !a.already_imported ? -Number(a.amount) : null,
+        // The cost entered in the log, shown even when it's counted from an import.
+        logCost: Number(a.amount) > 0 ? -Number(a.amount) : null,
         notes: [a.notes, t && t.notes, !t && a.already_imported && Number(a.amount) > 0 ? `${money(Number(a.amount))} already counted from a bank/card import` : '']
           .filter(Boolean).join(' · '),
         activity: a,
@@ -677,11 +679,23 @@
     renderLedgerBody();
   }
 
+  // Cost cell: what's counted, or the log's cost in gray when an import
+  // already counts it, or a dash for trips/hours with no cost.
+  function costCell(r) {
+    if (r.amount !== null) return el('td', { class: `num${r.amount < 0 ? ' neg' : ''}` }, money(r.amount));
+    if (r.logCost !== null && r.logCost !== undefined) {
+      return el('td', { class: 'num muted', title: 'Already counted from a bank/card import' }, money(r.logCost));
+    }
+    return el('td', { class: 'num muted' }, '—');
+  }
+
+  let editingLedgerKey = null;
+
   function renderLedgerBody() {
     const rows = ledgerAll.filter(passes).sort(compare);
     const body = document.getElementById('ledgerBody');
     body.replaceChildren(...(rows.length
-      ? rows.map((r) => el('tr', { class: 'bucketed', style: `--bucket:${FB.COLOR[r.bucket] || FB.COLOR.Other}` },
+      ? rows.map((r) => (r.key === editingLedgerKey && r.activity ? editRow(r) : el('tr', { class: 'bucketed', style: `--bucket:${FB.COLOR[r.bucket] || FB.COLOR.Other}` },
         el('td', { class: 'nowrap' }, dayLabel(r.date)),
         el('td', { class: 'nowrap' }, swatch(FB.COLOR[r.bucket] || FB.COLOR.Other), r.bucket),
         el('td', null, r.description),
@@ -691,12 +705,12 @@
         el('td', { class: 'muted nowrap' }, r.source),
         el('td', { class: 'num' }, r.miles ? String(r.miles) : ''),
         el('td', { class: 'num' }, r.hours ? String(r.hours) : ''),
-        el('td', { class: `num${r.amount < 0 ? ' neg' : ''}` }, r.amount === null ? '' : money(r.amount)),
+        costCell(r),
         el('td', { class: 'muted' }, r.notes),
         el('td', { class: 'row-actions' }, r.activity
-          ? [el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => startEdit(r.activity) }, 'Edit'),
+          ? [el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { editingLedgerKey = r.key; renderLedgerBody(); } }, 'Edit'),
             el('button', { class: 'btn btn-warning', type: 'button', onclick: () => removeActivity(r.activity) }, 'Remove')]
-          : el('span', { class: 'muted', title: 'Imported from Stessa - change it there and re-import' }, 'Stessa'))))
+          : el('span', { class: 'muted', title: 'Imported from Stessa - change it there and re-import' }, 'Stessa')))))
       : [el('tr', null, el('td', { colspan: LEDGER_COLUMNS.length + 1, class: 'muted' }, 'Nothing matches these filters.'))]));
 
     const spent = rows.reduce((s, r) => s + (r.amount === null ? 0 : Math.round(r.amount * 100)), 0) / 100;
@@ -704,6 +718,72 @@
     const hours = rows.reduce((s, r) => s + r.hours, 0);
     document.getElementById('ledgerSummary').textContent =
       `Showing ${rows.length} of ${ledgerAll.length} · ${money(spent)} · ${Math.round(miles).toLocaleString()} mi · ${round2(hours).toLocaleString()} h`;
+  }
+
+  // An activity-log row turned into inputs, edited in place in the table.
+  function editRow(r) {
+    const a = r.activity;
+    const input = (field, attrs = {}) => el('input', { class: 'cell-input', 'data-field': field, value: a[field] ?? '', ...attrs });
+    const bucket = el('select', { class: 'cell-input', 'data-field': 'bucket' }, FB.BUCKETS.map((b) => el('option', { value: b.name }, b.name)));
+    bucket.value = a.bucket || 'General Supplies';
+    const imported = el('input', { type: 'checkbox', 'data-field': 'already_imported' });
+    imported.checked = !!a.already_imported;
+    const tr = el('tr', { class: 'bucketed editing', style: `--bucket:${FB.COLOR[bucket.value] || FB.COLOR.Other}` },
+      el('td', null, input('date', { type: 'date' })),
+      el('td', null, bucket),
+      el('td', null, input('description', { type: 'text', placeholder: 'Description' }), input('purpose', { type: 'text', placeholder: 'Business purpose' })),
+      el('td', null, input('vendor', { type: 'text', placeholder: 'Location / vendor' })),
+      el('td', null, input('attendees', { type: 'text', placeholder: 'Who' })),
+      el('td', { class: 'muted' }, r.category),
+      el('td', null, el('label', { class: 'cell-check', title: 'Tick if a bank/card import already has this purchase' }, imported, ' In an import')),
+      el('td', null, input('miles', { type: 'number', min: '0', step: '1' })),
+      el('td', null, input('hours', { type: 'number', min: '0', step: '0.25' })),
+      el('td', null, input('amount', { type: 'number', min: '0', step: '0.01', placeholder: 'Cost $' })),
+      el('td', null, input('notes', { type: 'text', placeholder: 'Notes' })),
+      el('td', { class: 'row-actions' },
+        el('button', { class: 'btn btn-primary', type: 'button', onclick: () => saveRow(tr, a) }, 'Save'),
+        el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => { editingLedgerKey = null; renderLedgerBody(); } }, 'Cancel'),
+        el('div', { class: 'save-status row-status' })));
+    bucket.addEventListener('change', () => tr.style.setProperty('--bucket', FB.COLOR[bucket.value] || FB.COLOR.Other));
+    tr.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.tagName === 'INPUT') saveRow(tr, a);
+      if (e.key === 'Escape') { editingLedgerKey = null; renderLedgerBody(); }
+    });
+    setTimeout(() => tr.querySelector('[data-field="description"]').focus(), 0);
+    return tr;
+  }
+
+  async function saveRow(tr, a) {
+    const status = tr.querySelector('.row-status');
+    const val = (f) => tr.querySelector(`[data-field="${f}"]`);
+    const text = (f) => val(f).value.trim() || null;
+    const num = (f) => (val(f).value === '' ? null : Number(val(f).value));
+    if (!val('date').value || !text('description')) {
+      status.textContent = 'Date and description are required';
+      return;
+    }
+    const row = {
+      date: val('date').value,
+      bucket: val('bucket').value,
+      description: text('description'),
+      purpose: text('purpose'),
+      vendor: text('vendor'),
+      attendees: text('attendees'),
+      miles: num('miles') ?? 0,
+      hours: num('hours') ?? 0,
+      amount: num('amount'),
+      notes: text('notes'),
+      already_imported: val('already_imported').checked,
+    };
+    status.textContent = 'Saving...';
+    const { error } = await db.from('fin_activity').update(row).eq('id', a.id);
+    if (error) {
+      console.error(error);
+      status.textContent = 'Save failed - see console';
+      return;
+    }
+    editingLedgerKey = null;
+    await reloadActivity();
   }
 
   function bookingEntry(b, trip) {
