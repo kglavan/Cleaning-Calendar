@@ -105,6 +105,19 @@
 
   // ---------- Data ----------
 
+  // Bills drafted at the start of the next month count toward the month they
+  // cover, as in the owner's workbook (Black Hills gas paid Feb 2 = January).
+  // The transaction keeps its real payment date in paid_date.
+  const SERVICE_MONTH_BILLS = [/black hills/i];
+  const SERVICE_MONTH_CUTOFF_DAY = 5;
+  function serviceMonth(t) {
+    const day = Number(t.date.slice(8, 10));
+    if (day > SERVICE_MONTH_CUTOFF_DAY || !SERVICE_MONTH_BILLS.some((re) => re.test(t.description))) return t;
+    const [y, m] = t.date.split('-').map(Number);
+    const lastOfPrev = new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10);
+    return { ...t, paid_date: t.date, date: lastOfPrev };
+  }
+
   async function loadAll() {
     const status = document.getElementById('dataStatus');
     try {
@@ -115,7 +128,7 @@
         db.from('bookings').select('uid, source, start_date, end_date, assigned_cleaner, cancelled').eq('cancelled', false),
       ]);
       if (set.error) throw set.error;
-      transactions = tx;
+      transactions = tx.map(serviceMonth);
       activity = act;
       settings = Object.fromEntries(set.data.map((r) => [r.key, r.value]));
       bookings = bk.data || [];
@@ -333,7 +346,8 @@
         el('tbody', null, shown.map((t) => {
           const bucket = FB.bucketOf(t);
           return el('tr', { style: `--bucket:${FB.COLOR[bucket]}` },
-            el('td', { class: 'nowrap' }, dayLabel(t.date)),
+            el('td', { class: 'nowrap', title: t.paid_date ? 'Counted in the month the bill covers' : null },
+              t.paid_date ? `${dayLabel(t.date)} (paid ${dayLabel(t.paid_date)})` : dayLabel(t.date)),
             el('td', null, t.description),
             el('td', { class: 'muted' }, t.notes || ''),
             el('td', { class: `num${t.amount < 0 ? ' neg' : ''}` }, money(Number(t.amount), true)),
@@ -559,7 +573,7 @@
       miles: 0,
       hours: 0,
       amount: Number(t.amount),
-      notes: '',
+      notes: t.paid_date ? `Paid ${dayLabel(t.paid_date)}, counted in the month it covers` : '',
       activity: null,
     }));
     return rows;
@@ -952,7 +966,7 @@
       status.textContent = `Imported ${pendingImport.length} transactions.`;
       pendingImport = null;
       btn.classList.add('hidden');
-      transactions = await fetchAll('fin_transactions', '*', 'date');
+      transactions = (await fetchAll('fin_transactions', '*', 'date')).map(serviceMonth);
       renderYearOptions();
       renderAll();
     } catch (err) {
