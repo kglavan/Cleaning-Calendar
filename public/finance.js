@@ -899,13 +899,19 @@
     const tx = transactions.filter((t) => !t.excluded && yearOf(t.date) === year);
     const now = new Date();
     const lastMonth = year < now.getFullYear() ? 11 : year > now.getFullYear() ? -1 : now.getMonth();
+    // The current month's bills may simply not be paid or imported yet (and
+    // Black Hills drafts early next month), so it's "pending", not "missing".
+    const currentMonth = year === now.getFullYear() ? now.getMonth() : -1;
+    const emptyCell = (i) => {
+      if (i === currentMonth) return el('td', { class: 'muted', title: 'Not paid or not imported yet this month' }, 'pending');
+      if (i < lastMonth || (i === lastMonth && currentMonth === -1)) return el('td', { class: 'neg', title: 'Nothing found this month' }, 'missing');
+      return el('td', { class: 'muted' }, '-');
+    };
     document.getElementById('billsTable').replaceChildren(
       el('thead', null, el('tr', null, el('th', null, 'Bill'), MONTHS.map((m) => el('th', null, m)))),
       el('tbody', null, BILLS.map((b) => {
         const m = byMonth(tx.filter(b.test));
-        return el('tr', null, el('td', null, b.label), m.map((v, i) =>
-          Math.abs(v) >= 0.005 ? el('td', null, money(-v))
-            : el('td', { class: i <= lastMonth ? 'neg' : 'muted', title: i <= lastMonth ? 'Nothing found this month' : '' }, i <= lastMonth ? 'missing' : '-')));
+        return el('tr', null, el('td', null, b.label), m.map((v, i) => (Math.abs(v) >= 0.005 ? el('td', null, money(-v)) : emptyCell(i))));
       }))
     );
   }
