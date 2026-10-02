@@ -16,12 +16,15 @@
     <span class="legend-item"><span class="dot" style="background:#FF385C"></span>Airbnb</span>
     <span class="legend-item"><span class="dot" style="background:#00A699"></span>VRBO</span>
     <span class="legend-item"><span class="dot" style="background:#003580"></span>Booking.com</span>
+    <span class="legend-item"><span class="dot" style="background:#374151"></span>Direct</span>
     <span class="legend-item"><span class="dot" style="background:#cbd5e1"></span>Unassigned Cleaning</span>
     <span id="cleanerLegend"></span>
     <span class="legend-item"><span class="dot" style="background:#fca5a5"></span>Unavailable</span>
+    <span class="legend-item"><span class="dot" style="background:#fde68a"></span>Note</span>
   </div>
   <div class="header-actions">
     <span id="syncStatus" class="sync-status"></span>
+    <button id="addEntryBtn" class="btn btn-secondary">Add Booking / Note</button>
     <button id="markUnavailableBtn" class="btn btn-secondary">Mark Unavailable</button>
     <button id="syncNowBtn" class="btn btn-secondary">Sync Now</button>
   </div>
@@ -37,6 +40,11 @@
 
     <h2 id="modalTitle">Booking</h2>
     <p id="modalDates" class="modal-subtitle"></p>
+
+    <section class="modal-section">
+      <label for="calendarTitle">Title shown on the calendar</label>
+      <input id="calendarTitle" type="text" />
+    </section>
 
     <section class="modal-section">
       <label for="assignedCleaner">Assigned cleaner</label>
@@ -70,6 +78,7 @@
     <section class="modal-section">
       <button id="saveBtn" class="btn btn-primary">Save</button>
       <span id="saveStatus" class="save-status"></span>
+      <button id="cancelReservationBtn" class="btn btn-danger" type="button">Cancel reservation</button>
     </section>
 
     <hr />
@@ -129,6 +138,60 @@
     <section class="modal-section">
       <label>Existing entries</label>
       <div id="unavailList" class="issues-list"></div>
+    </section>
+  </div>
+</div>
+
+<div id="entryModalOverlay" class="modal-overlay hidden">
+  <div class="modal" role="dialog" aria-modal="true">
+    <button id="entryModalClose" class="modal-close" aria-label="Close">&times;</button>
+
+    <h2>Add Booking / Note</h2>
+    <p class="modal-subtitle">Add a direct booking (gets its own cleaning) or a note block (just a labeled bar).</p>
+
+    <section class="modal-section">
+      <label for="entryType">Type</label>
+      <select id="entryType">
+        <option value="booking">Direct booking</option>
+        <option value="note">Note block</option>
+      </select>
+    </section>
+
+    <section class="modal-section">
+      <label for="entryTitle">Title</label>
+      <input id="entryTitle" type="text" placeholder="e.g. Smith family, or Deck replacement" />
+    </section>
+
+    <section class="modal-section">
+      <label for="entryStart" id="entryStartLabel">Check-in</label>
+      <input id="entryStart" type="date" />
+    </section>
+
+    <section class="modal-section">
+      <label for="entryEnd" id="entryEndLabel">Check-out</label>
+      <input id="entryEnd" type="date" />
+    </section>
+
+    <section class="modal-section">
+      <label for="entryBody">Notes (optional)</label>
+      <textarea id="entryBody" rows="2"></textarea>
+    </section>
+
+    <section class="modal-section">
+      <button id="entrySaveBtn" class="btn btn-primary">Add</button>
+      <span id="entrySaveStatus" class="save-status"></span>
+    </section>
+
+    <hr />
+
+    <section class="modal-section">
+      <label>Note blocks</label>
+      <div id="noteList" class="issues-list"></div>
+    </section>
+
+    <section class="modal-section">
+      <label>Cancelled reservations</label>
+      <div id="cancelledList" class="issues-list"></div>
     </section>
   </div>
 </div>

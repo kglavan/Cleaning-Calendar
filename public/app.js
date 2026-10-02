@@ -8,6 +8,9 @@
   let calendar;
   let currentBooking = null; // the booking currently open in the modal
   let bookingsByUid = new Map();
+  let cancelledBookings = []; // reservations the user cancelled (hidden), kept so they can be restored
+
+  const bookingLabel = (b) => b.custom_title || cfg.SOURCE_LABELS[b.source] || b.source;
 
   // ---------- Calendar ----------
 
@@ -32,6 +35,19 @@
 
     if (error) {
       console.error('Failed to load cleaner unavailability', error);
+      return [];
+    }
+    return data;
+  }
+
+  async function fetchNotesRaw() {
+    const { data, error } = await db
+      .from('calendar_notes')
+      .select('*')
+      .order('start_date', { ascending: true });
+
+    if (error) {
+      console.error('Failed to load calendar notes', error);
       return [];
     }
     return data;
@@ -67,6 +83,7 @@
   function renderEventContent(arg) {
     const p = arg.event.extendedProps;
     if (p.kind === 'unavailability') return renderUnavailabilityEventContent(arg);
+    if (p.kind === 'note') return renderNoteEventContent(arg);
 
     const wrap = document.createElement('div');
     wrap.className = 'event-inner';
@@ -93,9 +110,19 @@
     wrap.appendChild(statusDot);
 
     const label = document.createElement('span');
-    label.textContent = cfg.SOURCE_LABELS[p.source] || p.source;
+    label.textContent = bookingLabel(p);
     wrap.appendChild(label);
 
+    return { domNodes: [wrap] };
+  }
+
+  function renderNoteEventContent(arg) {
+    const p = arg.event.extendedProps;
+    const wrap = document.createElement('div');
+    wrap.className = 'event-inner';
+    const label = document.createElement('span');
+    label.textContent = p.title;
+    wrap.appendChild(label);
     return { domNodes: [wrap] };
   }
 
@@ -118,6 +145,9 @@
   // bar with margins sized against the harness's actual rendered width -
   // that can't corrupt FullCalendar's own column-span layout.
   function eventDidMount(info) {
+    const ep = info.event.extendedProps;
+    if (ep.kind === 'note' && ep.body) info.el.title = ep.body;
+
     if (info.view.type.indexOf('dayGrid') !== 0) return;
     if (!info.isStart && !info.isEnd) return;
 
@@ -147,16 +177,21 @@
   }
 
   async function refreshCalendar() {
-    const [bookings, unavailability] = await Promise.all([
+    const [allBookings, unavailability, notes] = await Promise.all([
       fetchBookingsRaw(),
       fetchUnavailabilityRaw(),
+      fetchNotesRaw(),
     ]);
+    // Cancelled reservations disappear from the calendar (and so do the
+    // cleanings that were scheduled around them).
+    const bookings = allBookings.filter((b) => !b.hidden);
+    cancelledBookings = allBookings.filter((b) => b.hidden);
     const cleaningWindows = computeCleaningWindows(bookings);
     bookingsByUid = new Map(bookings.map((b) => [b.uid, b]));
 
     const bookingEvents = bookings.map((b) => ({
       id: b.uid,
-      title: cfg.SOURCE_LABELS[b.source] || b.source,
+      title: bookingLabel(b),
       start: b.start_date,
       end: addDaysStr(b.end_date, 1),
       allDay: true,
@@ -189,8 +224,18 @@
       extendedProps: { kind: 'unavailability', ...u },
     }));
 
+    const noteEvents = notes.map((n) => ({
+      id: `note:${n.id}`,
+      title: n.title,
+      start: n.start_date,
+      end: addDaysStr(n.end_date, 1),
+      allDay: true,
+      classNames: ['fc-note-event'],
+      extendedProps: { kind: 'note', ...n },
+    }));
+
     calendar.removeAllEvents();
-    calendar.addEventSource([...bookingEvents, ...cleaningEvents, ...unavailabilityEvents]);
+    calendar.addEventSource([...bookingEvents, ...cleaningEvents, ...unavailabilityEvents, ...noteEvents]);
   }
 
   function initCalendar() {
@@ -209,6 +254,10 @@
         const p = info.event.extendedProps;
         if (p.kind === 'unavailability') {
           openUnavailModal(p);
+          return;
+        }
+        if (p.kind === 'note') {
+          openEntryModal();
           return;
         }
         const booking = bookingsByUid.get(p.bookingUid);
@@ -262,7 +311,10 @@
     currentBooking = booking;
 
     document.getElementById('modalTitle').textContent =
-      booking.summary || cfg.SOURCE_LABELS[booking.source] || booking.source;
+      booking.custom_title || booking.summary || cfg.SOURCE_LABELS[booking.source] || booking.source;
+    const titleInput = document.getElementById('calendarTitle');
+    titleInput.value = booking.custom_title || '';
+    titleInput.placeholder = cfg.SOURCE_LABELS[booking.source] || booking.source;
     document.getElementById('modalDates').textContent =
       `${booking.start_date} → ${booking.end_date} (${cfg.SOURCE_LABELS[booking.source] || booking.source})`;
 
@@ -317,7 +369,51 @@
       return;
     }
 
+    // The calendar title is stored separately so saving the cleaning details
+    // keeps working even before the title feature's database update is applied.
+    const newTitle = document.getElementById('calendarTitle').value.trim();
+    if (newTitle !== (currentBooking.custom_title || '')) {
+      const { error: titleError } = await db.rpc('set_booking_display', {
+        p_uid: currentBooking.uid,
+        p_custom_title: newTitle || null,
+        p_hidden: false,
+      });
+      if (titleError) {
+        console.error(titleError);
+        saveStatus.textContent = 'Saved, but the title could not be changed';
+        await refreshCalendar();
+        return;
+      }
+      currentBooking.custom_title = newTitle || null;
+    }
+
     saveStatus.textContent = 'Saved';
+    await refreshCalendar();
+  });
+
+  document.getElementById('cancelReservationBtn').addEventListener('click', async () => {
+    if (!currentBooking) return;
+    const name = currentBooking.custom_title || currentBooking.summary || bookingLabel(currentBooking);
+    const ok = window.confirm(
+      `Cancel "${name}" (${currentBooking.start_date} to ${currentBooking.end_date})?\n\n` +
+      'It will be removed from the calendar along with the cleanings scheduled around it. ' +
+      'You can restore it later from Add Booking / Note.'
+    );
+    if (!ok) return;
+
+    const saveStatus = document.getElementById('saveStatus');
+    saveStatus.textContent = 'Cancelling...';
+    const { error } = await db.rpc('set_booking_display', {
+      p_uid: currentBooking.uid,
+      p_custom_title: currentBooking.custom_title || null,
+      p_hidden: true,
+    });
+    if (error) {
+      console.error(error);
+      saveStatus.textContent = 'Could not cancel - try again';
+      return;
+    }
+    closeModal();
     await refreshCalendar();
   });
 
@@ -591,6 +687,153 @@
     document.getElementById('unavailReason').value = '';
     await loadUnavailList();
     await refreshCalendar();
+  });
+
+  // ---------- Direct bookings, note blocks, cancelled reservations ----------
+
+  const entryOverlay = document.getElementById('entryModalOverlay');
+  const entryType = document.getElementById('entryType');
+
+  function syncEntryLabels() {
+    const isBooking = entryType.value === 'booking';
+    document.getElementById('entryStartLabel').textContent = isBooking ? 'Check-in' : 'First day';
+    document.getElementById('entryEndLabel').textContent = isBooking ? 'Check-out' : 'Last day';
+    document.getElementById('entryTitle').placeholder = isBooking
+      ? 'e.g. Smith family'
+      : 'e.g. Deck replacement';
+  }
+  entryType.addEventListener('change', syncEntryLabels);
+
+  async function loadEntryLists() {
+    const noteList = document.getElementById('noteList');
+    noteList.innerHTML = '';
+    const notes = await fetchNotesRaw();
+    if (notes.length === 0) {
+      noteList.textContent = 'No note blocks.';
+    }
+    notes.forEach((n) => {
+      const item = document.createElement('div');
+      item.className = 'issue-item';
+      const desc = document.createElement('span');
+      desc.textContent = `${n.title}: ${n.start_date} to ${n.end_date}${n.body ? ' (' + n.body + ')' : ''}`;
+      item.appendChild(desc);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-warning';
+      delBtn.style.marginLeft = '8px';
+      delBtn.textContent = 'Remove';
+      delBtn.addEventListener('click', async () => {
+        await db.from('calendar_notes').delete().eq('id', n.id);
+        await loadEntryLists();
+        await refreshCalendar();
+      });
+      item.appendChild(delBtn);
+      noteList.appendChild(item);
+    });
+
+    const cancelledList = document.getElementById('cancelledList');
+    cancelledList.innerHTML = '';
+    if (cancelledBookings.length === 0) {
+      cancelledList.textContent = 'No cancelled reservations.';
+    }
+    cancelledBookings.forEach((b) => {
+      const item = document.createElement('div');
+      item.className = 'issue-item';
+      const desc = document.createElement('span');
+      desc.textContent = `${bookingLabel(b)} (${cfg.SOURCE_LABELS[b.source] || b.source}): ${b.start_date} to ${b.end_date}`;
+      item.appendChild(desc);
+
+      const restoreBtn = document.createElement('button');
+      restoreBtn.className = 'btn btn-secondary';
+      restoreBtn.style.marginLeft = '8px';
+      restoreBtn.textContent = 'Restore';
+      restoreBtn.addEventListener('click', async () => {
+        await db.rpc('set_booking_display', {
+          p_uid: b.uid,
+          p_custom_title: b.custom_title || null,
+          p_hidden: false,
+        });
+        await refreshCalendar();
+        await loadEntryLists();
+      });
+      item.appendChild(restoreBtn);
+      cancelledList.appendChild(item);
+    });
+  }
+
+  function openEntryModal() {
+    document.getElementById('entrySaveStatus').textContent = '';
+    syncEntryLabels();
+    entryOverlay.classList.remove('hidden');
+    loadEntryLists();
+  }
+
+  function closeEntryModal() {
+    entryOverlay.classList.add('hidden');
+  }
+
+  document.getElementById('addEntryBtn').addEventListener('click', openEntryModal);
+  document.getElementById('entryModalClose').addEventListener('click', closeEntryModal);
+  entryOverlay.addEventListener('click', (e) => {
+    if (e.target === entryOverlay) closeEntryModal();
+  });
+
+  document.getElementById('entrySaveBtn').addEventListener('click', async () => {
+    const statusEl = document.getElementById('entrySaveStatus');
+    const isBooking = entryType.value === 'booking';
+    const title = document.getElementById('entryTitle').value.trim();
+    const start = document.getElementById('entryStart').value;
+    const end = document.getElementById('entryEnd').value;
+    const body = document.getElementById('entryBody').value.trim() || null;
+
+    if (!title) {
+      statusEl.textContent = 'A title is required';
+      return;
+    }
+    if (!start || !end) {
+      statusEl.textContent = 'Both dates are required';
+      return;
+    }
+    if (isBooking && end <= start) {
+      statusEl.textContent = 'Check-out must be after check-in';
+      return;
+    }
+    if (!isBooking && end < start) {
+      statusEl.textContent = 'Last day must be on or after the first day';
+      return;
+    }
+
+    statusEl.textContent = 'Saving...';
+    let error;
+    if (isBooking) {
+      ({ error } = await db.rpc('add_direct_booking', {
+        p_title: title,
+        p_start: start,
+        p_end: end,
+        p_notes: body,
+      }));
+    } else {
+      ({ error } = await db.from('calendar_notes').insert({
+        title,
+        body,
+        start_date: start,
+        end_date: end,
+      }));
+    }
+
+    if (error) {
+      console.error(error);
+      statusEl.textContent = 'Save failed - try again';
+      return;
+    }
+
+    statusEl.textContent = 'Added';
+    document.getElementById('entryTitle').value = '';
+    document.getElementById('entryStart').value = '';
+    document.getElementById('entryEnd').value = '';
+    document.getElementById('entryBody').value = '';
+    await refreshCalendar();
+    await loadEntryLists();
   });
 
   // ---------- Init ----------

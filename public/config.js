@@ -21,12 +21,14 @@ window.APP_CONFIG = {
     airbnb: "Airbnb",
     vrbo: "VRBO",
     booking: "Booking.com",
+    direct: "Direct",
   },
 
   SOURCE_COLORS: {
     airbnb: "#FF385C",
     vrbo: "#00A699",
     booking: "#003580",
+    direct: "#374151",
   },
 
   // Edit this list any time to change the cleaner checklist.

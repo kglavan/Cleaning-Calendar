@@ -200,3 +200,111 @@ create policy "public delete unavailability"
   on public.cleaner_unavailability for delete
   to anon
   using (true);
+
+-- ============================================================
+-- Calendar edits: custom titles, cancelling a reservation, direct
+-- bookings, and free-form note blocks.
+-- ============================================================
+
+-- Per-booking overrides. The daily sync never writes these columns, so
+-- they survive every re-sync.
+alter table public.bookings add column if not exists custom_title text;
+alter table public.bookings add column if not exists hidden boolean not null default false;
+
+-- Direct bookings are stored in the same table as synced ones.
+alter table public.bookings drop constraint if exists bookings_source_check;
+alter table public.bookings
+  add constraint bookings_source_check
+  check (source in ('airbnb', 'vrbo', 'booking', 'direct'));
+
+-- Set the calendar title and/or cancel (hide) / restore a reservation.
+create or replace function public.set_booking_display(
+  p_uid text,
+  p_custom_title text,
+  p_hidden boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.bookings
+  set
+    custom_title = nullif(btrim(p_custom_title), ''),
+    hidden = coalesce(p_hidden, false)
+  where uid = p_uid;
+end;
+$$;
+
+revoke all on function public.set_booking_display(text, text, boolean) from public;
+grant execute on function public.set_booking_display(text, text, boolean) to anon;
+
+-- Add a direct (non-platform) booking.
+create or replace function public.add_direct_booking(
+  p_title text,
+  p_start date,
+  p_end date,
+  p_notes text
+)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid text;
+begin
+  if p_start is null or p_end is null or p_end <= p_start then
+    raise exception 'check-out must be after check-in';
+  end if;
+
+  v_uid := 'direct:' || gen_random_uuid()::text;
+
+  insert into public.bookings (uid, source, summary, custom_title, start_date, end_date, notes)
+  values (
+    v_uid,
+    'direct',
+    nullif(btrim(p_title), ''),
+    nullif(btrim(p_title), ''),
+    p_start,
+    p_end,
+    nullif(btrim(p_notes), '')
+  );
+
+  return v_uid;
+end;
+$$;
+
+revoke all on function public.add_direct_booking(text, date, date, text) from public;
+grant execute on function public.add_direct_booking(text, date, date, text) to anon;
+
+-- Note blocks: a titled date range shown on the calendar (no cleaning).
+create table if not exists public.calendar_notes (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  body text,
+  start_date date not null,
+  end_date date not null check (end_date >= start_date),
+  created_at timestamptz not null default now()
+);
+
+alter table public.calendar_notes enable row level security;
+
+drop policy if exists "public read calendar notes" on public.calendar_notes;
+create policy "public read calendar notes"
+  on public.calendar_notes for select
+  to anon
+  using (true);
+
+drop policy if exists "public insert calendar notes" on public.calendar_notes;
+create policy "public insert calendar notes"
+  on public.calendar_notes for insert
+  to anon
+  with check (true);
+
+drop policy if exists "public delete calendar notes" on public.calendar_notes;
+create policy "public delete calendar notes"
+  on public.calendar_notes for delete
+  to anon
+  using (true);
