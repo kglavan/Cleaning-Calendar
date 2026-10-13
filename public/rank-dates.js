@@ -3,6 +3,11 @@
 // Plain script (no import/export) so the browser can load it with a <script>
 // tag; the tracker imports it for its side effect and reads globalThis.RankDates.
 (function () {
+  // Never search a 1-night stay: the 25% promotion needs 2+ nights, and a
+  // 1-night search doesn't show what guests booking a real stay see.
+  const MIN_NIGHTS = 2;
+  const nightsOf = (s) => Math.round((new Date(s.checkout + 'T00:00:00Z') - new Date(s.checkin + 'T00:00:00Z')) / 86400000);
+
   function isoDay(date) {
     return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())).toISOString().slice(0, 10);
   }
@@ -27,7 +32,8 @@
   // The soonest `count` stays of `nights` nights that are fully open on our
   // calendar, at least `leadDays` out and at least `spacingDays` apart so they
   // land in different weeks instead of all piling into the same open gap.
-  function openStays(bookings, { nights, count, leadDays = 2, horizonDays = 180, spacingDays = 7, today = isoDay(new Date()) }) {
+  function openStays(bookings, { nights: wanted, count, leadDays = 2, horizonDays = 180, spacingDays = 7, today = isoDay(new Date()) }) {
+    const nights = Math.max(wanted || MIN_NIGHTS, MIN_NIGHTS);
     const taken = bookedNights(bookings);
     const stays = [];
     const last = addDays(today, horizonDays);
@@ -50,8 +56,13 @@
     return stays;
   }
 
-  // All stays a saved search should check on this run.
+  // All stays a saved search should check on this run - never shorter than
+  // MIN_NIGHTS.
   function staysForSearch(search, bookings, today = isoDay(new Date())) {
+    return allStaysForSearch(search, bookings, today).filter((s) => nightsOf(s) >= MIN_NIGHTS);
+  }
+
+  function allStaysForSearch(search, bookings, today) {
     if (search.date_mode === 'fixed') {
       if (!search.fixed_checkin || !search.fixed_checkout || search.fixed_checkin < today) return [];
       return [{ checkin: search.fixed_checkin, checkout: search.fixed_checkout }];
@@ -68,10 +79,13 @@
 
   // Every open night in the next `horizonDays`, split into stays of about
   // `nights` nights, so the calendar view has a rank for each open day. Each
-  // open gap is cut into back-to-back stays; a leftover of one night is folded
-  // into the previous stay, and a gap shorter than `nights` is searched whole
-  // (that's the stay a guest would actually book).
-  function calendarStays(bookings, { nights, horizonDays = 45, leadDays = 1, today = isoDay(new Date()) }) {
+  // open gap is cut into back-to-back stays; a leftover shorter than
+  // MIN_NIGHTS is folded into the previous stay, and a gap shorter than
+  // `nights` is searched whole (that's the stay a guest would actually book).
+  // Gaps shorter than MIN_NIGHTS are skipped - they can't be booked as a
+  // 2-night stay.
+  function calendarStays(bookings, { nights: wanted, horizonDays = 45, leadDays = 1, today = isoDay(new Date()) }) {
+    const nights = Math.max(wanted || MIN_NIGHTS, MIN_NIGHTS);
     const taken = bookedNights(bookings);
     const stays = [];
     const first = addDays(today, leadDays);
@@ -85,9 +99,10 @@
       let gapEnd = d; // exclusive: first taken night or end of horizon
       while (gapEnd < end && !taken.has(gapEnd)) gapEnd = addDays(gapEnd, 1);
       let s = d;
-      while (s < gapEnd) {
+      while (s < gapEnd && nightsOf({ checkin: s, checkout: gapEnd }) >= MIN_NIGHTS) {
         let e = addDays(s, nights);
-        if (e > gapEnd || addDays(e, 1) === gapEnd) e = gapEnd; // fold a 1-night leftover in
+        // Fold a leftover too short to book on its own into this stay.
+        if (e > gapEnd || nightsOf({ checkin: e, checkout: gapEnd }) < MIN_NIGHTS) e = gapEnd;
         stays.push({ checkin: s, checkout: e });
         s = e;
       }
@@ -132,5 +147,5 @@
     });
   }
 
-  globalThis.RankDates = { isoDay, addDays, bookedNights, openStays, calendarStays, openGaps, staysForSearch, weekOf, oneStayPerWeek };
+  globalThis.RankDates = { MIN_NIGHTS, isoDay, addDays, bookedNights, openStays, calendarStays, openGaps, staysForSearch, weekOf, oneStayPerWeek };
 })();

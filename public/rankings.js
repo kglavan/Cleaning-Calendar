@@ -1192,7 +1192,7 @@
     if (mode === 'fixed') return 1;
     if (mode === 'open_dates') return parseInt(document.getElementById('sWindows').value, 10) || 1;
     return RD.calendarStays(bookings, {
-      nights: parseInt(document.getElementById('sNights').value, 10) || 3,
+      nights: parseInt(document.getElementById('sNights').value, 10) || 2,
       horizonDays: parseInt(document.getElementById('sHorizon').value, 10) || 45,
     }).length;
   }
