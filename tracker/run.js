@@ -5,6 +5,7 @@
 //
 //   npm run track                -> run all active searches, save to Supabase
 //   node run.js --show-dates     -> print the stays each search would check, run nothing
+//   node run.js --force --platform airbnb -> run now, one site only
 //   node run.js --dry-run --platform airbnb --location "Air Force Academy, CO" \
 //     --checkin 2026-10-28 --checkout 2026-11-01 --adults 2 --children 2 [--id 12345] [--pages 5]
 //                                -> run one ad-hoc search, print results, save nothing
@@ -303,7 +304,9 @@ async function main() {
     }
   }
 
-  const toRun = args.all ? searches : await pickRotation(db, searches);
+  // --platform airbnb runs just that site's searches.
+  const picked = args.platform ? searches.filter((s) => s.platform === args.platform) : searches;
+  const toRun = args.all ? picked : await pickRotation(db, picked);
   const jobs = interleave(toRun.flatMap((search) => {
     let stays = staysForSearch(search, bookings);
     if (search.date_mode === 'calendar' && PLATFORMS[search.platform].oneStayPerWeek) stays = oneStayPerWeek(stays);
