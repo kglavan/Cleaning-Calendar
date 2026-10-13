@@ -174,6 +174,11 @@
     renderSearchList();
     renderCalendarControls();
     if (currentView === 'calendar') renderCalendarView();
+    if (currentView === 'trend') {
+      trendSnaps = null; // pick up new tracker results
+      renderTrendControls();
+      renderTrendView();
+    }
     if (selectedSearchId && searches.some((s) => s.id === selectedSearchId)) openDetail(selectedSearchId);
     else closeDetail();
   }
@@ -225,7 +230,7 @@
     document.getElementById('emptyState').classList.toggle('hidden', searches.length > 0);
 
     const groups = new Map();
-    searches.forEach((s) => {
+    searches.filter((s) => s.active).forEach((s) => {
       if (!groups.has(s.label)) groups.set(s.label, []);
       groups.get(s.label).push(s);
     });
@@ -499,19 +504,25 @@
     } catch {}
     document.getElementById('gridView').classList.toggle('hidden', view !== 'grid');
     document.getElementById('calendarView').classList.toggle('hidden', view !== 'calendar');
-    ['Grid', 'Calendar'].forEach((v) => {
+    document.getElementById('trendView').classList.toggle('hidden', view !== 'trend');
+    ['Grid', 'Calendar', 'Trend'].forEach((v) => {
       const tab = document.getElementById('tab' + v);
       tab.classList.toggle('active', v.toLowerCase() === view);
       tab.setAttribute('aria-selected', String(v.toLowerCase() === view));
     });
     if (view === 'calendar') renderCalendarView();
+    if (view === 'trend') {
+      renderTrendControls();
+      renderTrendView();
+    }
   }
   document.getElementById('tabGrid').addEventListener('click', () => setView('grid'));
   document.getElementById('tabCalendar').addEventListener('click', () => setView('calendar'));
+  document.getElementById('tabTrend').addEventListener('click', () => setView('trend'));
 
   function renderCalendarControls() {
     const labelSel = document.getElementById('calLabel');
-    const labels = [...new Set(searches.map((s) => s.label))];
+    const labels = [...new Set(searches.filter((s) => s.active).map((s) => s.label))];
     // Prefer a label with "every open night" searches - those fill the calendar.
     const preferred = labels.find((l) => searches.some((s) => s.label === l && s.date_mode === 'calendar')) || labels[0];
     const keep = labels.includes(labelSel.value) ? labelSel.value : preferred;
@@ -524,7 +535,7 @@
     const mixSel = document.getElementById('calMix');
     const label = document.getElementById('calLabel').value;
     const mixesHere = [];
-    searches.filter((s) => s.label === label).forEach((s) => {
+    searches.filter((s) => s.active && s.label === label).forEach((s) => {
       if (!mixesHere.some((m) => mixKey(m) === mixKey(s))) mixesHere.push({ adults: s.adults, children: s.children });
     });
     mixesHere.sort((a, b) => a.adults + a.children - (b.adults + b.children) || a.children - b.children);
@@ -692,7 +703,7 @@
     const token = ++calRenderToken;
     const label = document.getElementById('calLabel').value;
     const mix = document.getElementById('calMix').value;
-    const list = searches.filter((s) => s.label === label && mixKey(s) === mix);
+    const list = searches.filter((s) => s.active && s.label === label && mixKey(s) === mix);
     const today = RD.isoDay(new Date());
     if (!calMonth) calMonth = today.slice(0, 7);
     const coverage = coverageFor(list);
@@ -833,6 +844,286 @@
   }
 
   // ---------- Saved search management ----------
+
+  // ---------- Trend: average position per day, one line per guest count ----------
+
+  // Like RankBreeze's search-position chart: each dot is the average rank our
+  // listing was found at across all stays checked that day for one guest
+  // count. One guest count is drawn bold; click a legend entry to switch.
+  const TREND_COLORS = ['#7c3aed', '#38bdf8', '#3b3b98', '#2bb5a0', '#f0a64a', '#65a30d', '#be185d'];
+  const TREND_AVG_COLOR = '#e4577f';
+  const TREND_RANGES = [
+    { key: '14', label: 'Last 14d', days: 14 },
+    { key: '30', label: 'Last 30d', days: 30 },
+    { key: '90', label: 'Last 90d', days: 90 },
+    { key: 'ytd', label: 'YTD' },
+    { key: '365', label: '1y', days: 365 },
+    { key: 'all', label: 'All' },
+  ];
+  let trendChart = null;
+  let trendRange = '30';
+  let trendFocus = null; // guest count drawn bold
+  let trendSnaps = null; // every snapshot loaded for the chart, oldest first
+  let trendLoadedFrom = undefined; // ISO day trendSnaps starts at; null = all history
+
+  const isoLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const runDay = (iso) => isoLocal(new Date(iso));
+  const fade = (hex, a) => hex + Math.round(a * 255).toString(16).padStart(2, '0');
+
+  function trendRangeDates() {
+    const to = document.getElementById('trendTo').value || isoLocal(new Date());
+    const today = new Date();
+    const r = TREND_RANGES.find((x) => x.key === trendRange);
+    let from = document.getElementById('trendFrom').value;
+    if (r && r.key === 'ytd') from = `${today.getFullYear()}-01-01`;
+    else if (r && r.key === 'all') from = null;
+    else if (r && r.days) from = isoLocal(new Date(today.getTime() - (r.days - 1) * 86400000));
+    return { from, to };
+  }
+
+  // Loads snapshots back to `from` (null = everything), only the columns the
+  // chart needs, a page at a time.
+  async function loadTrendSnaps(from) {
+    const covered = trendLoadedFrom === null || (trendLoadedFrom !== undefined && from && from >= trendLoadedFrom);
+    if (trendSnaps && covered) return;
+    const out = [];
+    for (let start = 0; ; start += 1000) {
+      let q = db.from('rank_snapshots').select('search_id, run_at, status, rank, page, page_size')
+        .order('run_at', { ascending: true }).range(start, start + 999);
+      // A day of margin for time zones; days are filtered locally after.
+      if (from) q = q.gte('run_at', new Date(new Date(from + 'T00:00:00').getTime() - 86400000).toISOString());
+      const { data, error } = await q;
+      if (error) throw error;
+      out.push(...data);
+      if (data.length < 1000) break;
+    }
+    trendSnaps = out;
+    trendLoadedFrom = from;
+  }
+
+  function renderTrendControls() {
+    const labelSel = document.getElementById('trendLabel');
+    const labels = [...new Set(searches.filter((s) => s.active).map((s) => s.label))];
+    const keepLabel = labels.includes(labelSel.value) ? labelSel.value : labels[0];
+    labelSel.replaceChildren(...labels.map((l) => el('option', { value: l }, l)));
+    if (keepLabel) labelSel.value = keepLabel;
+
+    const platSel = document.getElementById('trendPlatform');
+    const plats = PLATFORMS.filter((p) => searches.some((s) => s.active && s.label === labelSel.value && s.platform === p));
+    const keepPlat = plats.includes(platSel.value) ? platSel.value : plats[0];
+    platSel.replaceChildren(...plats.map((p) => el('option', { value: p }, platformLabel(p))));
+    if (keepPlat) platSel.value = keepPlat;
+
+    document.getElementById('trendZoom').replaceChildren(...TREND_RANGES.map((r) => el('button', {
+      type: 'button',
+      class: `zoom-btn${r.key === trendRange ? ' active' : ''}`,
+      'aria-pressed': String(r.key === trendRange),
+      onclick: () => {
+        trendRange = r.key;
+        document.getElementById('trendTo').value = '';
+        renderTrendControls();
+        renderTrendView();
+      },
+    }, r.label)));
+  }
+
+  async function renderTrendView() {
+    const status = document.getElementById('trendStatus');
+    const label = document.getElementById('trendLabel').value;
+    const platform = document.getElementById('trendPlatform').value;
+    const { from, to } = trendRangeDates();
+    if (trendRange) {
+      document.getElementById('trendFrom').value = from || '';
+      document.getElementById('trendTo').value = to;
+    }
+    if (!label || !platform) {
+      status.textContent = 'No saved searches yet.';
+      return;
+    }
+    try {
+      await loadTrendSnaps(from);
+    } catch (err) {
+      console.error(err);
+      status.textContent = 'Could not load rank history - see console.';
+      return;
+    }
+
+    // One line per guest count, from this label + platform's searches.
+    const groups = new Map(); // guests -> search ids
+    searches.filter((s) => s.active && s.label === label && s.platform === platform).forEach((s) => {
+      const g = guestCount(s);
+      if (!groups.has(g)) groups.set(g, new Set());
+      groups.get(g).add(s.id);
+    });
+    const counts = [...groups.keys()].sort((a, b) => a - b);
+    const inRange = trendSnaps.filter((s) => {
+      const d = runDay(s.run_at);
+      return (!from || d >= from) && d <= to;
+    });
+
+    // guests -> day -> { ranks, pageSizes, checked }
+    const byGuest = new Map(counts.map((g) => [g, new Map()]));
+    inRange.forEach((s) => {
+      const g = counts.find((c) => groups.get(c).has(s.search_id));
+      if (g === undefined || (s.status !== 'found' && s.status !== 'not_found')) return;
+      const day = runDay(s.run_at);
+      const m = byGuest.get(g);
+      if (!m.has(day)) m.set(day, { ranks: [], pageSizes: [], checked: 0 });
+      const cellData = m.get(day);
+      cellData.checked += 1;
+      if (s.status === 'found') {
+        cellData.ranks.push(s.rank);
+        if (s.page_size) cellData.pageSizes.push(s.page_size);
+      }
+    });
+    const days = [...new Set([...byGuest.values()].flatMap((m) => [...m.keys()]))].sort();
+
+    if (!days.length) {
+      status.textContent = 'No checks in this date range yet.';
+      if (trendChart) trendChart.destroy();
+      trendChart = null;
+      return;
+    }
+    status.textContent = '';
+    if (!counts.includes(trendFocus)) trendFocus = counts.includes(4) ? 4 : counts[0];
+
+    const pageSize = Math.round(median(inRange.filter((s) => groups.size && s.page_size && counts.some((c) => groups.get(c).has(s.search_id))).map((s) => s.page_size))) || null;
+    const point = (c) => {
+      if (!c || !c.ranks.length) return null;
+      const avg = c.ranks.reduce((a, b) => a + b, 0) / c.ranks.length;
+      const ps = median(c.pageSizes) || pageSize;
+      return { avg, page: ps ? Math.ceil(avg / ps) : null, found: c.ranks.length, checked: c.checked };
+    };
+    const details = new Map(); // dataset index -> per-day details for the tooltip
+
+    const datasets = counts.map((g, i) => {
+      const color = TREND_COLORS[i % TREND_COLORS.length];
+      const focus = g === trendFocus;
+      const pts = days.map((d) => point(byGuest.get(g).get(d)));
+      details.set(i, pts);
+      return {
+        label: `${g} guests`,
+        guests: g,
+        data: pts.map((p) => (p ? Math.round(p.avg * 10) / 10 : null)),
+        borderColor: focus ? color : fade(color, 0.3),
+        backgroundColor: focus ? color : fade(color, 0.3),
+        legendColor: color,
+        borderWidth: focus ? 3 : 1.5,
+        pointRadius: focus ? 4 : 2,
+        pointHoverRadius: 6,
+        spanGaps: true,
+        tension: 0,
+        order: focus ? 0 : 1,
+      };
+    });
+
+    // Average across guest counts, for each day.
+    const avgPts = days.map((d, di) => {
+      const vals = counts.map((g, i) => details.get(i)[di]).filter(Boolean);
+      if (!vals.length) return null;
+      const avg = vals.reduce((a, p) => a + p.avg, 0) / vals.length;
+      return { avg, page: pageSize ? Math.ceil(avg / pageSize) : null, found: vals.reduce((a, p) => a + p.found, 0), checked: vals.reduce((a, p) => a + p.checked, 0) };
+    });
+    details.set(datasets.length, avgPts);
+    datasets.push({
+      label: 'Average',
+      guests: 'avg',
+      data: avgPts.map((p) => (p ? Math.round(p.avg * 10) / 10 : null)),
+      borderColor: trendFocus === 'avg' ? TREND_AVG_COLOR : fade(TREND_AVG_COLOR, 0.35),
+      backgroundColor: trendFocus === 'avg' ? TREND_AVG_COLOR : fade(TREND_AVG_COLOR, 0.35),
+      legendColor: TREND_AVG_COLOR,
+      borderWidth: trendFocus === 'avg' ? 3 : 1.5,
+      pointRadius: trendFocus === 'avg' ? 4 : 2,
+      spanGaps: true,
+      order: trendFocus === 'avg' ? 0 : 1,
+    });
+    if (pageSize) {
+      datasets.push({
+        label: `End of page 1 (#${pageSize})`,
+        guests: null,
+        data: days.map(() => pageSize),
+        borderColor: '#2e9e5b',
+        legendColor: '#2e9e5b',
+        borderDash: [6, 4],
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHitRadius: 0,
+        order: 2,
+      });
+    }
+
+    const longDay = (iso) => new Date(iso + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    const allRanks = datasets.filter((d) => d.guests !== null).flatMap((d) => d.data).filter((v) => v !== null);
+
+    if (trendChart) trendChart.destroy();
+    trendChart = new Chart(document.getElementById('trendChart'), {
+      type: 'line',
+      data: { labels: days.map((d) => shortDate(d + 'T12:00:00')), datasets },
+      options: {
+        maintainAspectRatio: false,
+        interaction: { mode: 'nearest', intersect: false },
+        scales: {
+          y: {
+            reverse: true,
+            min: 0,
+            suggestedMax: Math.max(pageSize || 0, ...allRanks, 10) + 5,
+            title: { display: true, text: 'Average position (top = #1)' },
+            ticks: { precision: 0 },
+            grid: { color: '#eef0f3' },
+          },
+          x: { grid: { color: '#f3f4f6' } },
+        },
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              usePointStyle: true,
+              generateLabels: (c) => c.data.datasets.map((d, i) => ({
+                text: d.label,
+                fillStyle: d.legendColor,
+                strokeStyle: d.legendColor,
+                fontColor: d.guests === trendFocus ? '#1a1a1a' : '#6b6b70',
+                lineWidth: d.guests === trendFocus ? 3 : 1,
+                pointStyle: 'circle',
+                hidden: !c.isDatasetVisible(i),
+                datasetIndex: i,
+              })),
+            },
+            // Clicking a guest count makes it the bold line.
+            onClick: (e, item, legend) => {
+              const d = legend.chart.data.datasets[item.datasetIndex];
+              if (d.guests === null) return;
+              trendFocus = d.guests;
+              renderTrendView();
+            },
+          },
+          tooltip: {
+            filter: (item) => item.dataset.guests !== null,
+            callbacks: {
+              title: (items) => longDay(days[items[0].dataIndex]),
+              label: (item) => {
+                const p = details.get(item.datasetIndex)[item.dataIndex];
+                if (!p) return `${item.dataset.label}: not found`;
+                return [`${item.dataset.label}`, `#${Math.round(p.avg)}${p.page ? `, Page ${p.page}` : ''}`,
+                  `Found in ${p.found} of ${p.checked} stays checked`];
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  document.getElementById('trendLabel').addEventListener('change', () => {
+    renderTrendControls();
+    renderTrendView();
+  });
+  document.getElementById('trendPlatform').addEventListener('change', renderTrendView);
+  ['trendFrom', 'trendTo'].forEach((id) => document.getElementById(id).addEventListener('change', () => {
+    trendRange = null; // a custom range
+    renderTrendControls();
+    renderTrendView();
+  }));
 
   function renderSearchList() {
     const body = document.getElementById('searchList');
@@ -1030,7 +1321,8 @@
   });
 
   try {
-    if (localStorage.getItem('rankings.view') === 'calendar') currentView = 'calendar';
+    const saved = localStorage.getItem('rankings.view');
+    if (saved === 'calendar' || saved === 'trend') currentView = saved;
   } catch {}
   loadAll().then(() => setView(currentView));
 })();

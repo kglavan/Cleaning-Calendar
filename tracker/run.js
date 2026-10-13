@@ -180,7 +180,8 @@ function interleave(jobs) {
 // never-checked mixes first. Other date modes are cheap and run every time.
 // Pass --all to run everything.
 async function pickRotation(db, searches) {
-  const perRun = Number(process.env.MIXES_PER_RUN ?? 1);
+  // Unset = every guest mix on every run.
+  const perRun = process.env.MIXES_PER_RUN ? Number(process.env.MIXES_PER_RUN) : Infinity;
   const calendar = searches.filter((s) => s.date_mode === 'calendar');
   const others = searches.filter((s) => s.date_mode !== 'calendar');
   if (!calendar.length || perRun <= 0) return others;
@@ -257,6 +258,7 @@ async function main() {
       children: { type: 'string', default: '0' },
       pages: { type: 'string', default: '5' },
       all: { type: 'boolean', default: false },
+      force: { type: 'boolean', default: false },
     },
   });
 
@@ -283,6 +285,22 @@ async function main() {
   if (!searches.length) {
     console.log('No active searches - add some on the Rankings page.');
     return;
+  }
+
+  // The task fires every weekday; a run only goes ahead once RUN_EVERY_DAYS
+  // (default 5) have passed since the last one. --force runs regardless.
+  const everyDays = Number(process.env.RUN_EVERY_DAYS ?? 5);
+  if (!args.force && !args['show-dates'] && everyDays > 1) {
+    const { data: last, error: lastErr } = await db.from('rank_snapshots').select('run_at').order('run_at', { ascending: false }).limit(1);
+    if (lastErr) throw lastErr;
+    if (last.length) {
+      const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const since = Math.round((dayStart(new Date()) - dayStart(new Date(last[0].run_at))) / 86400000);
+      if (since < everyDays) {
+        console.log(`Last run was ${since} day(s) ago (${new Date(last[0].run_at).toLocaleDateString()}); runs every ${everyDays} days, so skipping today. Use --force to run anyway.`);
+        return;
+      }
+    }
   }
 
   const toRun = args.all ? searches : await pickRotation(db, searches);

@@ -22,7 +22,28 @@
   <div class="view-tabs" role="tablist">
     <button id="tabGrid" class="view-tab active" role="tab" aria-selected="true">Grid</button>
     <button id="tabCalendar" class="view-tab" role="tab" aria-selected="false">Calendar</button>
+    <button id="tabTrend" class="view-tab" role="tab" aria-selected="false">Trend</button>
   </div>
+
+  <section id="trendView" class="hidden">
+    <div class="panel">
+      <h3 style="margin-top:0">Average search position by guest count</h3>
+      <p class="hint" style="margin-top:0">Each dot is the average position your listing was found at across all the stays
+        checked that day, for one guest count. Top of the chart is #1. Click a guest count in the legend to highlight it;
+        hover a dot for the rank, page, and how many stays found you.</p>
+      <div class="trend-controls">
+        <label>Search <select id="trendLabel"></select></label>
+        <label>Platform <select id="trendPlatform"></select></label>
+        <div class="trend-zoom"><span class="muted">Zoom</span> <span id="trendZoom"></span></div>
+        <div class="trend-dates">
+          <label>From <input id="trendFrom" type="date" /></label>
+          <label>To <input id="trendTo" type="date" /></label>
+        </div>
+      </div>
+      <p id="trendStatus" class="hint"></p>
+      <div class="chart-wrap trend-chart"><canvas id="trendChart" aria-label="Average search position by guest count"></canvas></div>
+    </div>
+  </section>
 
   <section id="calendarView" class="hidden">
     <div class="panel">
